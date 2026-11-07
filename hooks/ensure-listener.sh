@@ -31,17 +31,14 @@ need=$(missing)
 [ -n "$need" ] || exit 0
 
 H="${LARKSPUR_HOME:-$HOME/.claude/larkspur}"
-steps=""
-case "$need" in *msg*)
-  if [ "$role" = "hub" ]; then d="飞书私聊（总控）"; else d="飞书群消息（本会话）"; fi
-  steps="$steps
-- command \`$H/listen.sh $chat\`，description \`$d\`，timeout_ms \`1800000\`" ;; esac
-case "$need" in *cards*)
-  steps="$steps
-- command \`$H/listen-cards.sh $chat\`，description \`飞书卡片（总控）\`，timeout_ms \`1800000\`" ;; esac
+if [ "$role" = "hub" ]; then
+  steps="command \`$H/listen.sh $chat --with-cards\`，description \`飞书私聊（总控）\`，timeout_ms \`1800000\`"
+else
+  steps="command \`$H/listen.sh $chat\`，description \`飞书群消息（本会话）\`，timeout_ms \`1800000\`"
+fi
 
 fs_log "listener-missing sid=$sid chat=$chat need=$need"
-reason="【Larkspur】本会话开着飞书同步，但飞书监听已经停止（通常是进程重启或上下文压缩造成的）。请现在用 Monitor 重新启动：$steps
+reason="【Larkspur】本会话开着飞书同步，但飞书监听已经停止（通常是进程重启或上下文压缩造成的）。请现在用 Monitor 重新启动：$steps。
 新监听会自动顶替同名的旧监听，并补发中断期间漏掉的飞书消息。启动后不要输出任何文字，直接结束本回合。"
 jq -cn --arg r "$reason" '{decision:"block", reason:$r}'
 exit 0

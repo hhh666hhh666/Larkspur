@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 用法：listen-cards.sh <chat_id>
 # 总控用：监听「新建会话」卡片的表单提交，只放行这个私聊里、你本人的提交。
+# 通常不单独启动，而是由 listen.sh <chat_id> --with-cards 在后台拉起，共用一个 Monitor。
 # 每次提交输出一行：飞书卡片提交: {"dir","title","prompt","token","message_id","card"}
 # 防重复提交：收到提交后，这里立刻用 token 把卡片改成「正在创建」（表单随之消失，约 1 秒），
 # 并且同一张卡片（message_id）只放行第一次提交。card 字段是这次更新的结果：creating 或 update-failed。
@@ -17,7 +18,7 @@ claim_listener "$chat.cards"
   --jq "select(.chat_id == \"$chat\" and .operator_id == \"$OPEN_ID\" and .action_tag == \"button\" and (.form_value // \"\") != \"\")
         | (.form_value | fromjson) as \$f
         | {dir: (\$f.dir // \"\"), title: (\$f.title // \"\"), prompt: (\$f.prompt // \"\"), token, message_id}" \
-  < <(tail -f /dev/null) 2>&1 |
+  < <(hold_stdin $$) 2>&1 |
 {
 declare -A seen=()
 while IFS= read -r line; do
@@ -31,8 +32,8 @@ while IFS= read -r line; do
       "$LARKSPUR_HOME/card-update.sh" "$token" creating "$dir" >/dev/null 2>&1 || state=update-failed
       printf '飞书卡片提交: %s\n' "$(printf '%s' "$line" | jq -c --arg s "$state" '. + {card:$s}')"
       fs_log "card-submit chat=$chat mid=$mid card=$state" ;;
-    *ready\ event_key*) printf '飞书卡片监听已就绪\n' ;;
-    *exited*|*\"ok\":false*|*error*|*ERROR*) printf '飞书卡片监听状态: %s\n' "$line" ;;
+    *ready\ event_key*) ;;
+    *exited*|*\"ok\":false*|*error*|*ERROR*) is_normal_exit "$line" || printf '飞书卡片监听状态: %s\n' "$line" ;;
   esac
 done
 }

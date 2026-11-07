@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# 用法：listen.sh <chat_id>
+# 用法：listen.sh <chat_id> [--with-cards]
+# --with-cards：总控用，同时在后台跑 listen-cards.sh，卡片提交事件也从这里输出，只占一个 Monitor。
 # 只放行「这个群里、用户本人」发的消息。每条消息输出一行，图片先下载再输出本地路径。
 # 图片合并：收到图片后最多等 WAIT 秒，期间到达的文字与图片合成一批一起输出；
 # 超时仍无文字，则输出图片并附一行「飞书提示: 仅收到图片」。纯文字消息立即输出。
 # 供 Claude Code 的 Monitor 使用：stdout 每行是一个事件（200ms 内的多行会合并为一条通知）。
-# 同一个群只留一个监听：新启动的会顶替旧的。
+# 同一个群只留一个监听：新启动的会顶替旧的。连上时不输出「就绪」，正常到时退出也不输出，
+# 免得每次续期多打扰 Claude 一个回合；只在真正出错时输出「飞书监听状态」。
 # 断线补取：监听连上后，会从上一个监听的启动时间起查一遍群消息，把中间漏掉的（进程重启、
 # Monitor 续期的空档）按顺序补发，已处理过的消息按 message_id 去重。
 set -u
@@ -14,6 +16,11 @@ require_open_id
 chat="${1:?缺少 chat_id}"
 WAIT="$IMAGE_WAIT"
 claim_listener "$chat.msg"
+cards_pid=""
+if [ "${2:-}" = "--with-cards" ]; then
+  "$LARKSPUR_HOME/listen-cards.sh" "$chat" & cards_pid=$!
+  trap 'release_listener "$chat.msg"; kill_tree "$cards_pid"' EXIT
+fi
 seen_f="$RUN_DIR/$chat.seen"; started_f="$RUN_DIR/$chat.started"
 prev_start=$(cat "$started_f" 2>/dev/null || true)
 date +%s > "$started_f"
@@ -81,7 +88,7 @@ backfill() {    # 补发上一个监听启动以来漏掉的消息（第一次�
 
 "$LARK" event consume im.message.receive_v1 --as bot --timeout 29m \
   --jq "select(.chat_id == \"$chat\" and .sender_id == \"$OPEN_ID\") | {message_id, message_type, content}" \
-  < <(tail -f /dev/null) 2>&1 |
+  < <(hold_stdin $$) 2>&1 |
 while :; do
   if [ "$deadline" -gt 0 ]; then
     remain=$((deadline - SECONDS)); [ "$remain" -lt 1 ] && remain=1
@@ -99,8 +106,8 @@ while :; do
 
   case "$line" in
     \{*) handle_msg "$line" ;;
-    *ready\ event_key*) printf '飞书监听已就绪\n'; backfill
+    *ready\ event_key*) backfill
                         [ -f "$seen_f" ] && tail -n 500 "$seen_f" > "$seen_f.tmp" && mv "$seen_f.tmp" "$seen_f" ;;
-    *exited*|*\"ok\":false*|*error*|*ERROR*) flush; printf '飞书监听状态: %s\n' "$line" ;;
+    *exited*|*\"ok\":false*|*error*|*ERROR*) flush; is_normal_exit "$line" || printf '飞书监听状态: %s\n' "$line" ;;
   esac
 done

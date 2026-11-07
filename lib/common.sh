@@ -7,6 +7,12 @@ LARKSPUR_HOME="${LARKSPUR_HOME:-$HOME/.claude/larkspur}"
 OPEN_ID="${LARKSPUR_OPEN_ID:-}"                       # 唯一被放行的发送者（你自己的 open_id）
 LARK="${LARKSPUR_LARK_CLI:-}"
 [ -n "$LARK" ] || LARK=$(command -v lark-cli 2>/dev/null || echo "$HOME/.local/bin/lark-cli")
+# npm 装的 lark-cli 是个 node 启动壳，只负责拉起同目录 bin/ 下的 Go 程序。直接调用 Go 程序，
+# 每个常驻监听能省下一个 node 进程（约 20 MB）。
+_lark_real=$(readlink -f "$LARK" 2>/dev/null || echo "$LARK")
+case "$_lark_real" in */scripts/run.js)
+  [ -x "${_lark_real%/scripts/run.js}/bin/lark-cli" ] && LARK="${_lark_real%/scripts/run.js}/bin/lark-cli" ;; esac
+unset _lark_real
 STATE_DIR="$LARKSPUR_HOME/sessions"                   # 每个会话一个 <session_id>.json
 INBOX="${LARKSPUR_INBOX:-$HOME/files/larkspur-inbox}" # 图片下载目录（须在 lark-cli 允许的根目录内）
 IMAGE_WAIT="${LARKSPUR_IMAGE_WAIT:-3}"                # 图片后等待文字合并的秒数
@@ -41,4 +47,8 @@ claim_listener() {   # 顶替同名的旧实例（连同它的 lark-cli 子进�
   trap "release_listener '$1'" EXIT
 }
 release_listener() { [ "$(cat "$RUN_DIR/$1.pid" 2>/dev/null)" = "$$" ] && rm -f "$RUN_DIR/$1.pid"; }
+# 给 lark-cli event consume 占住 stdin（它读到 EOF 就会退出）。父进程一退出就跟着退出，不留孤儿。
+hold_stdin() { while kill -0 "$1" 2>/dev/null; do sleep 30; done; }
+# lark-cli 的退出行：到时（reason: timeout）是正常续期，不必通知 Claude
+is_normal_exit() { case "$1" in *exited*"reason: timeout"*) return 0 ;; esac; return 1; }
 iso_time() { date -d "@$1" -Iseconds 2>/dev/null || date -r "$1" +%Y-%m-%dT%H:%M:%S%z; }
