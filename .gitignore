@@ -1,0 +1,4 @@
+config.sh
+sessions/
+*.log
+*.larkspur-bak.*

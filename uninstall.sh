@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Larkspur 卸载脚本：移除钩子、技能和脚本。
+# 默认保留个人配置与会话记录；加 --purge 一并删除。飞书里的群不会被删除。
+set -euo pipefail
+
+DEST="${LARKSPUR_HOME:-$HOME/.claude/larkspur}"
+SKILL_DIR="$HOME/.claude/skills/feishu"
+SETTINGS="$HOME/.claude/settings.json"
+say() { printf '[larkspur] %s\n' "$*"; }
+
+if [ -f "$SETTINGS" ] && command -v jq >/dev/null; then
+  cp "$SETTINGS" "$SETTINGS.larkspur-bak.$(date +%Y%m%d%H%M%S)"
+  tmp=$(mktemp)
+  jq --arg stop "$DEST/hooks/notify.sh" --arg end "$DEST/hooks/session-end.sh" '
+    def strip($c): map(select(([.hooks[]?.command] | index($c)) | not));
+    if .hooks then
+      .hooks.Stop       = ((.hooks.Stop // [])       | strip($stop))
+      | .hooks.SessionEnd = ((.hooks.SessionEnd // []) | strip($end))
+      | .hooks |= with_entries(select(.value | length > 0))
+      | if (.hooks | length) == 0 then del(.hooks) else . end
+    else . end
+  ' "$SETTINGS" > "$tmp" && jq -e . "$tmp" >/dev/null && mv "$tmp" "$SETTINGS"
+  say "已从 $SETTINGS 移除钩子（原文件已备份）"
+fi
+
+[ -f "$SKILL_DIR/SKILL.md" ] && grep -q 'Larkspur' "$SKILL_DIR/SKILL.md" && rm -rf "$SKILL_DIR" && say "已移除技能 $SKILL_DIR"
+
+rm -f "$DEST"/common.sh "$DEST"/on.sh "$DEST"/off.sh "$DEST"/listen.sh
+rm -rf "$DEST/hooks"
+say "已移除脚本"
+
+if [ "${1:-}" = "--purge" ]; then
+  rm -rf "$DEST"
+  say "已删除 $DEST（配置、会话记录、日志）"
+else
+  say "保留 $DEST 中的配置与会话记录；需要彻底删除请加 --purge"
+fi
