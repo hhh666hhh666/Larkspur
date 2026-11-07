@@ -22,6 +22,8 @@ SPAWN_MODE="${LARKSPUR_SPAWN_PERMISSION_MODE-bypassPermissions}"  # 总控新建
 LOG="$LARKSPUR_HOME/larkspur.log"                     # 只记事件，不记消息内容
 RUN_DIR="$LARKSPUR_HOME/run"                          # 监听进程的 pid、启动时间和已处理消息
 ACK_EMOJI="${LARKSPUR_ACK_EMOJI-Get}"                # 收到消息时给它加的表情回复（Get 即「了解」），留空不加
+DISPLAY_TZ="${LARKSPUR_DISPLAY_TZ:-Asia/Shanghai}"   # 控制台显示时间用的时区（默认 UTC+8）
+ALERTS="${LARKSPUR_ALERTS:-on}"                       # 转发或发回失败时，在总控私聊里提醒
 BACKFILL_HOURS="${LARKSPUR_BACKFILL_HOURS:-12}"       # 监听重启时，最多补取多少小时内漏掉的消息
 BACKFILL_MAX="${LARKSPUR_BACKFILL_MAX:-20}"           # 一次最多补发几条
 
@@ -29,6 +31,23 @@ mkdir -p "$STATE_DIR" "$INBOX" "$RUN_DIR"
 
 fs_log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
 state_file() { printf '%s/%s.json' "$STATE_DIR" "$1"; }
+# 会话的同步记录：先按会话 ID 找；找不到、而且查的就是当前会话时，再按桌面端会话 ID 找。
+# 桌面端重启或压缩上下文后，同一个桌面端会话可能换了新的会话 ID（CLAUDE_CODE_SESSION_ID），
+# 但桌面端会话 ID（CLAUDE_CODE_HOST_SESSION_ID，即 local_…）不变；找到后把记录迁到新的会话 ID 下。
+# 总是输出记录文件的路径（可能不存在），调用方自己判断 [ -f ]。
+resolve_state() {
+  local sid="$1" f old h="${CLAUDE_CODE_HOST_SESSION_ID:-}"
+  f=$(state_file "$sid")
+  if [ ! -f "$f" ] && [ -n "$h" ] && [ "$sid" = "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    for old in "$STATE_DIR"/*.json; do
+      [ -f "$old" ] && jq -e --arg h "$h" '.desktop_id == $h' "$old" >/dev/null 2>&1 || continue
+      jq --arg s "$sid" '.session_id = $s' "$old" > "$f.tmp" && mv "$f.tmp" "$f" && rm -f "$old"
+      fs_log "state-migrated old=$(basename "$old" .json) sid=$sid desktop=$h"
+      break
+    done
+  fi
+  printf '%s' "$f"
+}
 require_open_id() {
   [ -n "$OPEN_ID" ] || { echo "未配置 LARKSPUR_OPEN_ID，请编辑 $LARKSPUR_HOME/config.sh" >&2; exit 1; }
 }
@@ -72,3 +91,19 @@ routed_chats() {   # 所有活动的非总控会话的群
     jq -r 'select(.active == true and .role != "hub") | .chat_id // empty' "$f" 2>/dev/null
   done | sort -u
 }
+
+# ---- 控制台与提醒 ----
+console_refresh() {   # 状态变化时顺手刷新控制台卡片（后台进行；控制台自己触发的不重复刷新）
+  [ -n "${LARKSPUR_NO_CONSOLE_REFRESH:-}" ] && return 0
+  [ -x "$LARKSPUR_HOME/console.sh" ] && [ -f "$RUN_DIR/console.json" ] || return 0
+  ( "$LARKSPUR_HOME/console.sh" refresh >/dev/null 2>&1 & )
+}
+alert() {   # <chat_id> <去重键> <Markdown 文本>：异常提醒，同一个键 10 分钟内只提醒一次
+  [ "$ALERTS" = on ] || return 0
+  local f="$RUN_DIR/alert-$2" now; now=$(date +%s)
+  [ -f "$f" ] && [ $(( now - $(cat "$f") )) -lt 600 ] && return 0
+  echo "$now" > "$f"
+  ( "$LARK" im +messages-send --as bot --chat-id "$1" --markdown "$3" >/dev/null 2>&1 & )
+  fs_log "alert key=$2"
+}
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }

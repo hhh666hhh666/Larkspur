@@ -8,7 +8,7 @@ input=$(cat)
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 reason=$(printf '%s' "$input" | jq -r '.reason // "other"' 2>/dev/null)
 [ -n "$sid" ] || exit 0
-f=$(state_file "$sid")
+f=$(resolve_state "$sid")
 [ -f "$f" ] && [ "$(jq -r '.active' "$f")" = "true" ] || exit 0
 case "$reason" in
   clear|logout) "$LARKSPUR_HOME/off.sh" "$sid" "会话已结束" >/dev/null 2>&1 ;;

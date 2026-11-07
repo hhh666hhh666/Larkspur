@@ -5,7 +5,7 @@ set -u
 . "${LARKSPUR_HOME:-$HOME/.claude/larkspur}/common.sh"
 
 sid="${1:?缺少 session_id}"; reason="${2:-已手动关闭}"
-f=$(state_file "$sid")
+f=$(resolve_state "$sid")
 [ -f "$f" ] || { echo "该会话未开启过飞书同步"; exit 0; }
 
 chat_id=$(jq -r '.chat_id' "$f")
@@ -17,4 +17,5 @@ if [ "$was_active" = "true" ]; then
     --text "飞书同步已关闭（$reason）。群会保留，之后在该会话里再开启会继续用这个群。" >/dev/null 2>&1
 fi
 fs_log "off sid=$sid chat=$chat_id reason=$reason"
+console_refresh
 echo "已关闭：$chat_id"

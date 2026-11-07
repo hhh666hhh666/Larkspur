@@ -2,12 +2,19 @@
 # Larkspur 离线测试用的假 lark-cli：模拟事件流、图片下载和卡片更新
 case "$1 $2" in
   "event consume")
+    if [ "$3" = "application.bot.menu_v6" ]; then sleep 300; exit 0; fi
     if [ "$3" = "card.action.trigger" ]; then
       echo "[event] ready event_key=card.action.trigger" >&2
-      c() { printf '{"dir":"%s","title":"","prompt":"","token":"tok%s","message_id":"%s"}\n' "$1" "$2" "$3"; }
+      c() { jq -cn --arg d "$1" --arg t "tok$2" --arg m "$3" \
+              '{tag:"button", value:"", form:({dir:$d, title:"", prompt:""} | tojson), token:$t, message_id:$m}'; }
+      v() { jq -cn --arg v "$1" '{tag:"button", value:$v, form:"", token:"tokc", message_id:"om_console"}'; }
       c proj-a 1 om_card1; sleep 1
       c proj-a 2 om_card1; sleep 1   # 同一张卡片的第二次点击，应被丢弃
       c proj-b 3 om_card2            # 另一张卡片，应放行
+      if [ -n "${FAKE_CONSOLE:-}" ]; then   # 控制台：切到会话页、点归档
+        sleep 0.5; v '{"lk":"c","op":"page","page":"sessions"}'
+        sleep 1; v '{"lk":"c","op":"archive","sid":"g"}'; sleep 1.5
+      fi
       echo "[event] exited — received 3 event(s) (reason: timeout)" >&2
       exit 0
     fi
@@ -49,6 +56,12 @@ case "$1 $2" in
       | jq "$q" ;;
   "im reactions")
     [ -n "${FAKE_LARK_CALLS:-}" ] && printf '%s\n' "$*" >> "$FAKE_LARK_CALLS" ;;
+  "api PATCH"|"im pins")
+    [ -n "${FAKE_LARK_CALLS:-}" ] && printf '%s\n' "$*" >> "$FAKE_LARK_CALLS"
+    echo '{"ok":true,"code":0}' ;;
+  "im +messages-send")
+    [ -n "${FAKE_LARK_CALLS:-}" ] && printf '%s\n' "$*" >> "$FAKE_LARK_CALLS"
+    echo '{"ok":true,"data":{"message_id":"om_console","chat_id":"oc_test"}}' ;;
   "api POST")
     [ -n "${FAKE_LARK_CALLS:-}" ] && printf '%s\n' "$*" >> "$FAKE_LARK_CALLS"
     echo '{"code":0}' ;;

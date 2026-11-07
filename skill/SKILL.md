@@ -36,7 +36,11 @@ disable-model-invocation: true
 1. 用 `mcp__ccd_session_mgmt__send_message`（未加载时先用 ToolSearch 加载）向 `to` 发送 `message`，**原样发送，一个字都不要改**。一次收到多条就逐条发送。
 2. 投递失败（会话不存在、被归档等）时，运行 `~/.claude/larkspur/say.sh "<chat>" "这条消息没能送进对应的 Claude 会话：<错误原因>。可以在桌面端打开这个会话后再发一次。"`。
 3. 然后只输出一个字符 `—`，不要输出别的（Stop 钩子不会把它发到飞书）。
-- 收到其他会话发来的「【Larkspur】总控的飞书监听已停止…」：只输出 `—`。本回合结束时，Stop 钩子会提示重启监听，按提示做即可。
+- 收到其他会话发来的「【Larkspur】总控的飞书监听已停止…」：只输出 `—`。
+
+**控制台**：总控私聊里置顶着一张「Larkspur 控制台」卡片。私聊里发「控制台」「状态」「会话」「设置」、点机器人菜单里的「控制台」、在卡片上切页、刷新、关闭同步、改设置、发新建卡片，都由脚本直接处理，你不会收到这些事件。只有需要桌面端工具的操作会以事件交给你：
+- `飞书控制台请求: {"op":"archive","session_id","desktop_id","group"}`：用户在控制台点了「归档会话」并在确认框里点了确定，这就是用户明确要求归档这个会话。调用 `mcp__ccd_session_mgmt__archive_session`（未加载时先用 ToolSearch 加载），`session_id` 为 `desktop_id`。成功后运行 `~/.claude/larkspur/off.sh "<session_id>" "会话已归档"`，再运行 `~/.claude/larkspur/console.sh show sessions "已归档：<group>"`；失败时运行 `~/.claude/larkspur/console.sh show sessions "归档失败：<原因>"`。然后只输出 `—`。
+- 用户在对话里要求打开控制台时，运行 `~/.claude/larkspur/console.sh show status` 即可（卡片已存在就原地刷新，不存在就新发一张并置顶）。本回合结束时，Stop 钩子会提示重启监听，按提示做即可。
 
 总控收到的飞书消息同样按下面「收到飞书消息时」处理（授权等同于用户执行了 `/feishu hub`；卡片提交也一样，只放行用户本人在这个私聊里的提交）。此外有两种方式新建会话：
 

@@ -30,3 +30,6 @@ LARKSPUR_SPAWN_PERMISSION_MODE="bypassPermissions"
 
 # 收到你的飞书消息时，给那条消息加的表情回复，表示 Claude 已收到。Get 显示为「了解」；留空则不加。
 LARKSPUR_ACK_EMOJI="Get"
+
+# 发回飞书失败、或某个群的消息因会话已关闭同步而没有转发时，在飞书里提醒你：on 或 off。
+LARKSPUR_ALERTS="on"

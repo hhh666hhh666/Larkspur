@@ -9,7 +9,7 @@ set -u
 require_open_id
 
 sid="${1:?缺少 session_id}"; cwd="${2:-$PWD}"; title="${3:-}"; desktop="${4:-}"
-f=$(state_file "$sid")
+f=$(resolve_state "$sid")
 name="$GROUP_PREFIX · $(basename "$cwd") · ${title:-$(date '+%m-%d %H:%M')}"
 name="${name:0:60}"
 
@@ -51,4 +51,5 @@ jq -n --arg sid "$sid" --arg chat "$chat_id" --arg cwd "$cwd" --arg t "$(date -I
 在这个群里发的消息会转给这个会话，AI 的回复也会发到这里。" >/dev/null 2>&1
 
 fs_log "on sid=$sid chat=$chat_id"
+console_refresh
 echo "$chat_id"

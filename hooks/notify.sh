@@ -12,7 +12,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 input=$(cat)
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty')
 [ -n "$sid" ] || exit 0
-f=$(state_file "$sid")
+f=$(resolve_state "$sid")
 [ -f "$f" ] || exit 0
 [ "$(jq -r '.active' "$f")" = "true" ] || exit 0
 chat_id=$(jq -r '.chat_id' "$f")
@@ -46,5 +46,8 @@ if "$LARK" im +messages-send --as bot --chat-id "$chat_id" --markdown "$msg" >/d
   fs_log "outbound sid=$sid chat=$chat_id"
 else
   fs_log "outbound-failed sid=$sid chat=$chat_id"
+  if hf=$(hub_state) && [ "$(jq -r '.session_id' "$hf")" != "$sid" ]; then
+    alert "$(jq -r '.chat_id' "$hf")" "out-$sid" "会话「$(jq -r '.group_name // .session_id' "$f")」的回复没能发回飞书群，可以在桌面端查看这条回复。"
+  fi
 fi
 exit 0

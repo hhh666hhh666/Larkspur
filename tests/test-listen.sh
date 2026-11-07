@@ -3,7 +3,7 @@
 # 用法：tests/test-listen.sh   （约 20 秒）
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d); trap 'pkill -f "$TMP/" 2>/dev/null; rm -rf "$TMP"' EXIT
 cp "$ROOT"/lib/*.sh "$TMP/"
 export LARKSPUR_HOME="$TMP" LARKSPUR_LARK_CLI="$ROOT/tests/fake-lark.sh" \
        LARKSPUR_OPEN_ID="ou_test" LARKSPUR_INBOX="$TMP/inbox" LARKSPUR_IMAGE_WAIT=10

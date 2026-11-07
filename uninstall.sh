@@ -26,7 +26,7 @@ fi
 [ -f "$SKILL_DIR/SKILL.md" ] && grep -q 'Larkspur' "$SKILL_DIR/SKILL.md" && rm -rf "$SKILL_DIR" && say "已移除技能 $SKILL_DIR"
 
 rm -f "$DEST"/common.sh "$DEST"/on.sh "$DEST"/off.sh "$DEST"/listen.sh "$DEST"/hub-on.sh "$DEST"/spawn.sh \
-      "$DEST"/card-new.sh "$DEST"/card-update.sh "$DEST"/listen-cards.sh "$DEST"/say.sh "$DEST"/mode.sh
+      "$DEST"/card-new.sh "$DEST"/card-update.sh "$DEST"/listen-cards.sh "$DEST"/say.sh "$DEST"/mode.sh "$DEST"/console.sh "$DEST"/listen-menu.sh
 rm -rf "$DEST/hooks" "$DEST/run"
 say "已移除脚本"
 

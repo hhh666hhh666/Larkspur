@@ -7,7 +7,7 @@ set -u
 require_open_id
 
 sid="${1:?缺少 session_id}"; desktop="${2:-local_$1}"
-f=$(state_file "$sid")
+f=$(resolve_state "$sid")
 
 out=$("$LARK" im +messages-send --as bot --user-id "$OPEN_ID" --markdown "**Larkspur 总控已开启**
 
@@ -24,4 +24,5 @@ chat=$(printf '%s' "$out" | jq -r '.data.chat_id // empty' 2>/dev/null)
 jq -n --arg sid "$sid" --arg chat "$chat" --arg cwd "$PWD" --arg t "$(date -Iseconds)" --arg d "$desktop" \
    '{session_id:$sid, desktop_id:$d, chat_id:$chat, cwd:$cwd, active:true, role:"hub", enabled_at:$t, last_sent_hash:""}' > "$f"
 fs_log "hub-on sid=$sid chat=$chat"
+console_refresh
 echo "$chat"

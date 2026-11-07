@@ -12,7 +12,7 @@ export LARKSPUR_HOME="$TMP" LARKSPUR_LARK_CLI="$ROOT/tests/fake-lark.sh" LARKSPU
        LARKSPUR_INBOX="$TMP/inbox" LARKSPUR_IMAGE_WAIT=1 FAKE_LARK_MODE=recover
 chmod +x "$ROOT/tests/fake-lark.sh"
 . "$TMP/common.sh"
-cleanup() { for p in "${A:-}" "${B:-}" "${H:-}" "${R:-}"; do [ -n "$p" ] && kill_tree "$p" 2>/dev/null; done; rm -rf "$TMP"; }
+cleanup() { for p in "${A:-}" "${B:-}" "${H:-}" "${R:-}"; do [ -n "$p" ] && kill_tree "$p" 2>/dev/null; done; pkill -f "$TMP/" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail=0
 check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
@@ -59,6 +59,14 @@ check "卡片正常到时退出不打扰" '! grep -q "状态" "$TMP/h.out"'
 h_all=$(tree "$H" | tr '\n' ' ')
 kill_tree "$H"; sleep 0.5
 check "总控监听被杀后不留孤儿进程" 'for k in $h_all; do kill -0 $k 2>/dev/null && exit 1; done; true'
+# ---- 会话换了新 ID：按桌面端会话 ID 找回记录并迁移 ----
+jq -n '{session_id:"old1", desktop_id:"local_d1", chat_id:"oc_m", active:true}' > "$TMP/sessions/old1.json"
+f=$(CLAUDE_CODE_SESSION_ID=new1 CLAUDE_CODE_HOST_SESSION_ID=local_d1 bash -c '. "$LARKSPUR_HOME/common.sh"; resolve_state new1')
+check "换了会话 ID 后按桌面端 ID 迁移记录" '[ -f "$TMP/sessions/new1.json" ] && [ ! -f "$TMP/sessions/old1.json" ] && [ "$(jq -r .session_id "$TMP/sessions/new1.json")" = new1 ]'
+f=$(CLAUDE_CODE_SESSION_ID=hubsid CLAUDE_CODE_HOST_SESSION_ID=local_d1 bash -c '. "$LARKSPUR_HOME/common.sh"; resolve_state other')
+check "查的不是当前会话时不迁移" '[ -f "$TMP/sessions/new1.json" ] && [ ! -f "$TMP/sessions/other.json" ]'
+rm -f "$TMP/sessions/new1.json"
+
 # ---- 路由模式 ----
 rm -f "$TMP"/sessions/*.json "$TMP"/run/*
 jq -n '{session_id:"h", desktop_id:"local_h", chat_id:"oc_h", active:true, role:"hub"}' > "$TMP/sessions/h.json"

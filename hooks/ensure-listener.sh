@@ -11,7 +11,7 @@ input=$(cat)
 [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false')" = "true" ] && exit 0
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty')
 [ -n "$sid" ] || exit 0
-f=$(state_file "$sid")
+f=$(resolve_state "$sid")
 [ -f "$f" ] && [ "$(jq -r '.active' "$f")" = "true" ] || exit 0
 chat=$(jq -r '.chat_id // empty' "$f"); [ -n "$chat" ] || exit 0
 role=$(jq -r '.role // ""' "$f")

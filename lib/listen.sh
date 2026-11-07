@@ -8,7 +8,9 @@
 # - 总控（--hub，旧写法 --with-cards 等同）：
 #   1. 自己私聊里的消息照常输出；
 #   2. 后台跑 listen-cards.sh，卡片提交也从这里输出；
-#   3. 其他开着同步的会话的群里，用户发的消息输出成一行「飞书转发: {"to","chat","group","message"}」，
+#   3. 后台跑 listen-menu.sh，响应机器人菜单里的「控制台」按钮；私聊里发「控制台」「状态」「会话」「设置」
+#      也由脚本直接打开控制台卡片，不唤醒 Claude；
+#   4. 其他开着同步的会话的群里，用户发的消息输出成一行「飞书转发: {"to","chat","group","message"}」，
 #      （另有 chat 字段）由总控用 send_message 投进对应会话，在桌面端显示为消息气泡。
 #
 # 回执：每条放行的消息都会被加上 ACK_EMOJI 表情（默认「了解」），表示 Claude 已收到。
@@ -29,11 +31,18 @@ if [ -z "$hub" ] && router_active; then
 fi
 
 claim_listener "$chat.msg"
-cards_pid=""
+cards_pid=""; menu_pid=""
 if [ -n "$hub" ]; then
   "$LARKSPUR_HOME/listen-cards.sh" "$chat" & cards_pid=$!
-  trap 'release_listener "$chat.msg"; kill_tree "$cards_pid"' EXIT
+  "$LARKSPUR_HOME/listen-menu.sh" $$ & menu_pid=$!
+  trap 'release_listener "$chat.msg"; kill_tree "$cards_pid"; kill_tree "$menu_pid"' EXIT
 fi
+cfg_m=$(file_mtime "$LARKSPUR_HOME/config.sh")
+reload_cfg() {   # 控制台改了 config.sh 时，不用重启监听就生效
+  local m; m=$(file_mtime "$LARKSPUR_HOME/config.sh")
+  [ "$m" = "$cfg_m" ] && return 0
+  cfg_m=$m; . "$LARKSPUR_HOME/common.sh"; WAIT="$IMAGE_WAIT"; fs_log "config-reloaded chat=$chat"
+}
 seen_f="$RUN_DIR/$chat.seen"; started_f="$RUN_DIR/$chat.started"
 prev_start=$(cat "$started_f" 2>/dev/null || true)
 date +%s > "$started_f"
@@ -63,13 +72,18 @@ $l"; done
 
 handle_msg() {  # 处理一条 JSON 消息：{chat_id, message_id, message_type, content}；第二个参数为补发标记
   local line="$1" tag="${2:-}" c mid mtype raw key n=0 out got target to="" group=""
+  reload_cfg
   c=$(printf '%s' "$line" | jq -r ".chat_id // \"$chat\"")
   mid=$(printf '%s' "$line" | jq -r '.message_id')
   if [ -f "$seen_f" ] && grep -qxF "$mid" "$seen_f"; then return; fi
   printf '%s\n' "$mid" >> "$seen_f"
   if [ "$c" != "$chat" ]; then
     target=$(route_target "$c")
-    [ -n "$target" ] || { fs_log "route-skip chat=$c mid=$mid"; return; }
+    if [ -z "$target" ]; then
+      fs_log "route-skip chat=$c mid=$mid"
+      alert "$c" "skip-$c" "这个群对应的 Claude 会话已经关闭了飞书同步，这条消息没有转发。需要的话在那个会话里执行 \`/feishu on\` 重新开启。"
+      return
+    fi
     to=${target%%$'\t'*}; group=${target#*$'\t'}
   fi
   # 回执：给这条飞书消息加个表情（默认「了解」），后台进行，不耽误转发
@@ -91,6 +105,16 @@ handle_msg() {  # 处理一条 JSON 消息：{chat_id, message_id, message_type,
     fi
   done
   fs_log "inbound chat=$c mid=$mid type=$mtype images=$n"
+
+  # 总控私聊里的固定命令：脚本直接处理，不唤醒 Claude
+  if [ -n "$hub" ] && [ "$c" = "$chat" ] && [ "$mtype" = text ]; then
+    case "$(printf '%s' "$raw" | tr -d '[:space:]')" in
+      控制台) "$LARKSPUR_HOME/console.sh" show none >/dev/null 2>&1 & return ;;
+      状态)   "$LARKSPUR_HOME/console.sh" show status >/dev/null 2>&1 & return ;;
+      会话|会话列表) "$LARKSPUR_HOME/console.sh" show sessions >/dev/null 2>&1 & return ;;
+      设置|功能选项) "$LARKSPUR_HOME/console.sh" show options >/dev/null 2>&1 & return ;;
+    esac
+  fi
 
   buf_chat="$c"; buf_to="$to"; buf_group="$group"; [ -n "$tag" ] && buf_tag="$tag"
   local p
