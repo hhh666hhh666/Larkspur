@@ -14,6 +14,7 @@
 - **图片**：群里的图片会下载到本地，交给 Claude 看图。图片后 3 秒内跟上的文字会合并成一条消息。
 - **桌面端留痕**：Claude 回复飞书消息时，会先引用你的原话，桌面端的对话记录里能看到你在飞书说过什么。发回飞书时会去掉这段引用。
 - **只认你本人**：只放行你自己的 open_id、且发在该会话专属群里的消息。
+- **总控：在飞书里新建会话**：把一个会话设为总控（`/feishu hub`），在和机器人的私聊里发 `新会话 <目录> [标题]`，就会在该目录新建一个 Claude Code 会话、建好它的专属群，并导入桌面端侧边栏。
 - **不依赖第三方服务**：只用到官方的 [`lark-cli`](https://www.npmjs.com/package/@larksuite/cli) 和 Claude Code 自带的钩子、技能与 Monitor 工具。
 
 ## 工作原理
@@ -33,6 +34,8 @@ Claude Code 会话 ───────────► on.sh：机器人建群�
 |---|---|
 | `lib/on.sh` / `lib/off.sh` | 开启、关闭会话同步，建群或复用已有的群 |
 | `lib/listen.sh` | 监听飞书消息，供 Monitor 使用，每行输出一个事件 |
+| `lib/hub-on.sh` | 把会话设为总控，同步对象是你和机器人的私聊 |
+| `lib/spawn.sh` | 总控用：后台新建会话、建群，并用 `claude://resume?session=<id>` 导入桌面端 |
 | `hooks/notify.sh` | Stop 钩子：只给开启了同步的会话，把最终回复发到对应的群 |
 | `hooks/session-end.sh` | SessionEnd 钩子：会话结束时把同步标记为关闭 |
 | `skill/SKILL.md` | `/feishu on \| off` 技能，告诉 Claude 如何处理飞书事件 |
@@ -83,8 +86,26 @@ cd Larkspur
 | `/feishu on` | 为当前会话开启同步，群名用会话标题 |
 | `/feishu on 修登录 bug` | 开启同步，并自定义群名标题 |
 | `/feishu off` | 关闭同步，群保留，再次开启时复用同一个群 |
+| `/feishu hub` | 把当前会话设为总控 |
 
 关闭会话时会自动关闭同步。
+
+### 总控：在飞书里新建会话
+
+1. 找一个常开的会话，执行 `/feishu hub`。机器人会在你们的私聊里发一条说明。
+2. 在私聊里发 `新会话 <目录> [标题]`。目录可以是绝对路径，或 `LARKSPUR_PROJECTS_ROOT` 下的名字。
+3. 总控会：
+   1. 在该目录用 `claude -p` 后台新建一个会话；
+   2. 为它建专属群；
+   3. 通过 `claude://resume?session=<id>` 把它导入 Claude 桌面端；
+   4. 给它发一条消息，让它启动自己的监听。
+4. 去新群里对话即可，桌面端侧边栏里也能看到这个会话。
+
+注意：
+
+- 导入时桌面端会切到新会话，可能打断你正在桌面端的操作。
+- 新会话收到的是总控转述的开启指令，不是你亲手输入的。
+- 导入深链接是从桌面应用里观察到的行为，不是公开文档中的接口，以后的版本可能改变。
 
 ## 配置
 
@@ -97,6 +118,8 @@ cd Larkspur
 | `LARKSPUR_INBOX` | `~/files/larkspur-inbox` | 图片下载目录，必须在 lark-cli 允许的根目录内 |
 | `LARKSPUR_IMAGE_WAIT` | `3` | 图片后等待文字合并的秒数 |
 | `LARKSPUR_GROUP_PREFIX` | `Claude` | 群名前缀 |
+| `LARKSPUR_PROJECTS_ROOT` | `$HOME` | 总控「新会话 <名字>」时相对目录的根 |
+| `LARKSPUR_CLAUDE_BIN` | 自动查找 | 总控新建会话时用的 `claude` 命令 |
 
 改了配置后，需要在会话里重新 `/feishu on`，监听才会用上新值。
 

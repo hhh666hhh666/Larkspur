@@ -43,7 +43,7 @@ fi
 # 3. 技能
 mkdir -p "$SKILL_DIR"
 cp "$SRC/skill/SKILL.md" "$SKILL_DIR/SKILL.md"
-say "技能已安装到 $SKILL_DIR（命令：/feishu on | off）"
+say "技能已安装到 $SKILL_DIR（命令：/feishu on | off | hub）"
 
 # 4. 钩子（先删掉旧的同名条目再追加，保证幂等）
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"

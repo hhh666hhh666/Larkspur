@@ -11,6 +11,7 @@ STATE_DIR="$LARKSPUR_HOME/sessions"                   # 每个会话一个 <sess
 INBOX="${LARKSPUR_INBOX:-$HOME/files/larkspur-inbox}" # 图片下载目录（须在 lark-cli 允许的根目录内）
 IMAGE_WAIT="${LARKSPUR_IMAGE_WAIT:-3}"                # 图片后等待文字合并的秒数
 GROUP_PREFIX="${LARKSPUR_GROUP_PREFIX:-Claude}"       # 群名前缀
+PROJECTS_ROOT="${LARKSPUR_PROJECTS_ROOT:-$HOME}"      # 总控「新会话 <名字>」时，相对目录的根
 LOG="$LARKSPUR_HOME/larkspur.log"                     # 只记事件，不记消息内容
 
 mkdir -p "$STATE_DIR" "$INBOX"

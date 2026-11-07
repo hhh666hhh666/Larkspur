@@ -16,3 +16,9 @@ LARKSPUR_IMAGE_WAIT=3
 
 # 飞书群名前缀，群名形如「Claude · 项目目录名 · 会话标题」。
 LARKSPUR_GROUP_PREFIX="Claude"
+
+# 总控模式：「新会话 <名字>」里不是绝对路径的目录，相对于这个根目录查找。
+LARKSPUR_PROJECTS_ROOT="$HOME"
+
+# 总控模式新建会话时用的 claude 命令。留空则自动查找（PATH 中的 claude，或桌面端自带的那份）。
+LARKSPUR_CLAUDE_BIN=""
