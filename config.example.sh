@@ -22,3 +22,8 @@ LARKSPUR_PROJECTS_ROOT="$HOME"
 
 # 总控模式新建会话时用的 claude 命令。留空则自动查找（PATH 中的 claude，或桌面端自带的那份）。
 LARKSPUR_CLAUDE_BIN=""
+
+# 总控新建的会话导入桌面端后，切换到哪个权限模式：default、acceptEdits、auto、bypassPermissions。
+# 桌面端导入的会话一律是「手动」，从飞书发的指令会卡在确认弹窗上。切换时桌面端会弹一张确认卡，要在电脑上点一次。
+# 设为空字符串则不切换。
+LARKSPUR_SPAWN_PERMISSION_MODE="bypassPermissions"

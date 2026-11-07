@@ -14,6 +14,10 @@ name="${name:0:60}"
 
 chat_id=""
 [ -f "$f" ] && chat_id=$(jq -r '.chat_id // empty' "$f")
+# 复用已有的群又没给新标题时，沿用原来的群名
+if [ -n "$chat_id" ] && [ -z "$title" ]; then
+  old=$(jq -r '.group_name // empty' "$f"); [ -n "$old" ] && name="$old"
+fi
 
 if [ -n "$chat_id" ] && [ -n "$title" ]; then
   "$LARK" im +chat-update --as bot --chat-id "$chat_id" --name "$name" >/dev/null 2>&1 \

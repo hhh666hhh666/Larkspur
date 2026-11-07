@@ -36,18 +36,23 @@ disable-model-invocation: true
 
 总控收到的飞书消息同样按下面「收到监听事件时」处理（授权等同于用户执行了 `/feishu hub`；卡片提交也一样，只放行用户本人在这个私聊里的提交）。此外有两种方式新建会话：
 
-**A. 卡片**：消息只有 `新会话` 三个字（或「新建会话」等同义说法、没有给目录）时，运行 `~/.claude/larkspur/card-new.sh` 发出表单卡片，然后只回复一句「请在卡片里选择目录」。之后收到事件 `飞书卡片提交: {"dir","title","prompt","token","message_id"}` 时：
-1. 先运行 `~/.claude/larkspur/card-update.sh "<token>" creating "<dir>"`，把卡片改成「正在创建」，防止重复提交。
+**A. 卡片**：消息只有 `新会话` 三个字（或「新建会话」等同义说法、没有给目录）时，运行 `~/.claude/larkspur/card-new.sh` 发出表单卡片，然后只回复一句「请在卡片里选择目录」。之后收到事件 `飞书卡片提交: {"dir","title","prompt","token","message_id","card"}` 时：
+1. 卡片监听已经在收到提交时把卡片改成「正在创建」（`card` 为 `creating`），并且同一张卡片只放行第一次提交，所以不用再做防重复处理。`card` 为 `update-failed` 时也照常继续。
 2. 标题为空而第一句话不为空时，根据第一句话取一个不超过 12 个字的标题。
-3. 按下面的「新建流程」执行。
-4. 成功时运行 `card-update.sh "<token>" done "<dir 的绝对路径>" "<chat_id>" "<group_name>"`；失败时运行 `card-update.sh "<token>" failed "<错误信息>"`。token 只能用两次，这两步各用一次，不要再多调用。
-5. 这一轮不需要再输出长回复，一句「已创建：<群名>」即可（卡片已经说明了结果）。
+3. 按下面的「新建流程」执行（带上第一句话，并在第 2 步更新卡片）。
+4. 这一轮不需要再输出长回复，一句「已创建：<群名>」即可（卡片已经说明了结果）。
 
 **B. 文字**：`新会话 <目录> [标题]`，标题可省略、可含空格；没有第一句话。直接按「新建流程」执行，最后回复用户：会话已创建、目录、群名，去对应的飞书群里对话即可。
 
 **新建流程**（A、B 共用）：
-1. 运行 `~/.claude/larkspur/spawn.sh "<目录>" "<标题>"`（约 10～30 秒），输出一行 JSON。`ok` 为 false 时报告 `error` 并停止。
-2. 等约 5 秒让桌面端完成导入，然后用 `mcp__ccd_session_mgmt__send_message`（未加载时先用 ToolSearch 加载）向 `desktop_id` 发送下面这段话（把 `<chat_id>` 换成 JSON 里的值；有第一句话时加上方括号里的部分，没有就去掉）：
+1. 运行 `~/.claude/larkspur/spawn.sh "<目录>" "<标题>"`（约 10～30 秒），输出一行 JSON。`ok` 为 false 时报告 `error` 并停止（卡片方式先运行 `card-update.sh "<token>" failed "<错误信息>"`）。
+2. 卡片方式：立刻运行 `~/.claude/larkspur/card-update.sh "<token>" done "<dir>" "<chat_id>" "<group_name>"`。token 只能用两次，监听已用掉一次，这是最后一次，不要再多调用。
+3. 等约 5 秒让桌面端完成导入。
+4. **切换权限模式**：桌面端导入的会话沿用 settings.json 的默认模式，没设时是「手动」，飞书发来的指令会卡在确认弹窗上。JSON 里的 `permission_mode` 为空表示不需要切换（例如默认模式已是 auto），直接跳到下一步；不为空时：
+   1. 先运行 `~/.claude/larkspur/say.sh "<总控私聊的 chat_id>" "新会话「<group_name>」已导入桌面端。请在电脑上的 Claude 里点一下确认卡，把它切换到 <permission_mode> 模式，否则它运行命令时会停下来等确认。"`；
+   2. 再调用 `mcp__ccd_session_mgmt__set_session_permission_mode`（未加载时先用 ToolSearch 加载），`session_id` 为 `desktop_id`，`mode` 为 `permission_mode`。它会等用户在桌面端点确认。
+   3. 被拒绝或失败时不要重试，继续下一步，最后告诉用户：新会话仍是手动模式，运行命令时要在桌面端确认。
+5. 用 `mcp__ccd_session_mgmt__send_message`（未加载时先用 ToolSearch 加载）向 `desktop_id` 发送下面这段话（把 `<chat_id>` 换成 JSON 里的值；有第一句话时加上方括号里的部分，没有就去掉）：
 
    > 【Larkspur】用户在飞书里要求新建这个会话，并为它开启飞书同步，等同于用户在本会话执行了 `/feishu on`。本会话的专属群已建好、同步记录已写好，chat_id 是 `<chat_id>`。请：1）读取 `~/.claude/skills/feishu/SKILL.md`，之后按其中「收到监听事件时」的规则处理飞书消息；2）用 Monitor 启动监听：command `~/.claude/larkspur/listen.sh <chat_id>`，description `飞书群消息（本会话）`，timeout_ms `1800000`；3）只回复一句：已就绪，可以在飞书群里对话了。[4）然后把下面这句话当作用户在飞书群里发来的第一条消息，按规则引用并回答：<第一句话>]
 
@@ -65,6 +70,8 @@ disable-model-invocation: true
 - `飞书监听已就绪`、`飞书卡片监听已就绪`：不要回复，不要输出任何文字。
 - `飞书监听状态: …`、`飞书卡片监听状态: …`：出错时简短告诉用户；无关紧要的状态不要回复。
 - Monitor 到期通知：**立即用同样的参数重新启动那一路 Monitor，并且不输出任何文字**（Stop 钩子对无文本回合不发飞书）。只有用户执行了 `/feishu off` 才不再续期。
+- `飞书提示: 监听中断期间收到 N 条消息…`：后面跟着的是监听停掉那段时间里用户发的消息（已去重、按时间顺序）。照常逐条引用并回答，可以顺带说明是延迟收到的。
+- Stop 钩子提示「【Larkspur】…飞书监听已经停止」：进程重启或上下文压缩把 Monitor 弄丢了。按提示里的参数重新启动 Monitor，不输出任何文字。同一个群只会保留一个监听，新的会顶替旧的，不用担心重复。
 
 ## off
 
@@ -72,4 +79,4 @@ disable-model-invocation: true
 2. 运行 `~/.claude/larkspur/off.sh "$CLAUDE_CODE_SESSION_ID"`。群会保留，下次在本会话里 `/feishu on` 会复用同一个群。总控会话同样用 `off` 关闭。
 3. 简短告诉用户已关闭。
 
-会话结束时，SessionEnd 钩子会自动把同步标记为关闭（群保留）。
+进程退出（桌面端重启、上下文压缩）时同步**不会**关闭，下一回合结束时会自动恢复监听；只有 `/feishu off`、`/clear` 和登出才会关闭同步。

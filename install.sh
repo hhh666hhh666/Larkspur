@@ -18,8 +18,10 @@ LARK=$(command -v lark-cli 2>/dev/null || true)
 
 # 1. 脚本
 mkdir -p "$DEST/hooks" "$DEST/sessions"
-cp "$SRC"/lib/*.sh "$DEST/"
-cp "$SRC"/hooks/*.sh "$DEST/hooks/"
+# 先写临时文件再 mv 替换：正在运行的监听脚本仍读旧文件，不会被就地改写打乱
+put() { cp "$1" "$2.new.$$" && mv -f "$2.new.$$" "$2"; }
+for f in "$SRC"/lib/*.sh;   do put "$f" "$DEST/$(basename "$f")"; done
+for f in "$SRC"/hooks/*.sh; do put "$f" "$DEST/hooks/$(basename "$f")"; done
 chmod +x "$DEST"/*.sh "$DEST"/hooks/*.sh
 say "脚本已安装到 $DEST"
 
@@ -50,11 +52,14 @@ say "技能已安装到 $SKILL_DIR（命令：/feishu on | off | hub）"
 cp "$SETTINGS" "$SETTINGS.larkspur-bak.$(date +%Y%m%d%H%M%S)"
 stop_cmd="$DEST/hooks/notify.sh"
 end_cmd="$DEST/hooks/session-end.sh"
+ensure_cmd="$DEST/hooks/ensure-listener.sh"
 tmp=$(mktemp)
-jq --arg stop "$stop_cmd" --arg end "$end_cmd" '
+jq --arg stop "$stop_cmd" --arg end "$end_cmd" --arg ensure "$ensure_cmd" '
   def strip($c): map(select(([.hooks[]?.command] | index($c)) | not));
   .hooks //= {}
-  | .hooks.Stop       = ((.hooks.Stop // [])       | strip($stop)) + [{hooks:[{type:"command", command:$stop, async:true, timeout:30}]}]
+  | .hooks.Stop       = ((.hooks.Stop // [])       | strip($stop) | strip($ensure))
+                        + [{hooks:[{type:"command", command:$stop, async:true, timeout:30}]},
+                           {hooks:[{type:"command", command:$ensure, timeout:10}]}]
   | .hooks.SessionEnd = ((.hooks.SessionEnd // []) | strip($end))  + [{hooks:[{type:"command", command:$end, timeout:15}]}]
 ' "$SETTINGS" > "$tmp"
 jq -e . "$tmp" >/dev/null && mv "$tmp" "$SETTINGS"
