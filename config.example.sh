@@ -27,3 +27,6 @@ LARKSPUR_CLAUDE_BIN=""
 # 桌面端导入的会话一律是「手动」，从飞书发的指令会卡在确认弹窗上。切换时桌面端会弹一张确认卡，要在电脑上点一次。
 # 设为空字符串则不切换。
 LARKSPUR_SPAWN_PERMISSION_MODE="bypassPermissions"
+
+# 收到你的飞书消息时，给那条消息加的表情回复，表示 Claude 已收到。Get 显示为「了解」；留空则不加。
+LARKSPUR_ACK_EMOJI="Get"

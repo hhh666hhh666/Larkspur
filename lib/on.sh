@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 用法：on.sh <session_id> <cwd> [标题]
+# 用法：on.sh <session_id> <cwd> [标题] [桌面端会话 ID]
+# 桌面端会话 ID（local_…）供总控转发消息用；不给时沿用上次记录的，再没有就按 local_<session_id> 推测。
 # 为会话开启飞书同步：已有群则复用，否则由机器人新建独立群（你为群主）。
 # 群名为「<前缀> · 项目目录名 · 标题」；没给标题时用开启时间。给了标题且群已存在，会同步改名。
 # 成功时 stdout 只输出一行 chat_id。
@@ -7,7 +8,7 @@ set -u
 . "${LARKSPUR_HOME:-$HOME/.claude/larkspur}/common.sh"
 require_open_id
 
-sid="${1:?缺少 session_id}"; cwd="${2:-$PWD}"; title="${3:-}"
+sid="${1:?缺少 session_id}"; cwd="${2:-$PWD}"; title="${3:-}"; desktop="${4:-}"
 f=$(state_file "$sid")
 name="$GROUP_PREFIX · $(basename "$cwd") · ${title:-$(date '+%m-%d %H:%M')}"
 name="${name:0:60}"
@@ -18,6 +19,8 @@ chat_id=""
 if [ -n "$chat_id" ] && [ -z "$title" ]; then
   old=$(jq -r '.group_name // empty' "$f"); [ -n "$old" ] && name="$old"
 fi
+[ -z "$desktop" ] && [ -f "$f" ] && desktop=$(jq -r '.desktop_id // empty' "$f")
+[ -n "$desktop" ] || desktop="local_$sid"
 
 if [ -n "$chat_id" ] && [ -n "$title" ]; then
   "$LARK" im +chat-update --as bot --chat-id "$chat_id" --name "$name" >/dev/null 2>&1 \
@@ -37,8 +40,8 @@ if [ -z "$chat_id" ]; then
   fs_log "group-created sid=$sid chat=$chat_id"
 fi
 
-jq -n --arg sid "$sid" --arg chat "$chat_id" --arg cwd "$cwd" --arg t "$(date -Iseconds)" --arg name "$name" \
-   '{session_id:$sid, chat_id:$chat, group_name:$name, cwd:$cwd, active:true, enabled_at:$t, last_sent_hash:""}' > "$f"
+jq -n --arg sid "$sid" --arg chat "$chat_id" --arg cwd "$cwd" --arg t "$(date -Iseconds)" --arg name "$name" --arg d "$desktop" \
+   '{session_id:$sid, desktop_id:$d, chat_id:$chat, group_name:$name, cwd:$cwd, active:true, enabled_at:$t, last_sent_hash:""}' > "$f"
 
 "$LARK" im +messages-send --as bot --chat-id "$chat_id" \
   --markdown "**飞书同步已开启**

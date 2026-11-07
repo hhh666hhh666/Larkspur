@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 用法：listen-cards.sh <chat_id>
 # 总控用：监听「新建会话」卡片的表单提交，只放行这个私聊里、你本人的提交。
-# 通常不单独启动，而是由 listen.sh <chat_id> --with-cards 在后台拉起，共用一个 Monitor。
+# 通常不单独启动，而是由 listen.sh <chat_id> --hub 在后台拉起，共用一个 Monitor。
 # 每次提交输出一行：飞书卡片提交: {"dir","title","prompt","token","message_id","card"}
 # 防重复提交：收到提交后，这里立刻用 token 把卡片改成「正在创建」（表单随之消失，约 1 秒），
 # 并且同一张卡片（message_id）只放行第一次提交。card 字段是这次更新的结果：creating 或 update-failed。

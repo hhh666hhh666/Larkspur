@@ -21,6 +21,7 @@ PROJECTS_ROOT="${LARKSPUR_PROJECTS_ROOT:-$HOME}"      # 总控「新会话 <名�
 SPAWN_MODE="${LARKSPUR_SPAWN_PERMISSION_MODE-bypassPermissions}"  # 总控新建的会话导入后切到的权限模式，留空不切换
 LOG="$LARKSPUR_HOME/larkspur.log"                     # 只记事件，不记消息内容
 RUN_DIR="$LARKSPUR_HOME/run"                          # 监听进程的 pid、启动时间和已处理消息
+ACK_EMOJI="${LARKSPUR_ACK_EMOJI-Get}"                # 收到消息时给它加的表情回复（Get 即「了解」），留空不加
 BACKFILL_HOURS="${LARKSPUR_BACKFILL_HOURS:-12}"       # 监听重启时，最多补取多少小时内漏掉的消息
 BACKFILL_MAX="${LARKSPUR_BACKFILL_MAX:-20}"           # 一次最多补发几条
 
@@ -52,3 +53,22 @@ hold_stdin() { while kill -0 "$1" 2>/dev/null; do sleep 30; done; }
 # lark-cli 的退出行：到时（reason: timeout）是正常续期，不必通知 Claude
 is_normal_exit() { case "$1" in *exited*"reason: timeout"*) return 0 ;; esac; return 1; }
 iso_time() { date -d "@$1" -Iseconds 2>/dev/null || date -r "$1" +%Y-%m-%dT%H:%M:%S%z; }
+
+# ---- 路由模式：有活动的总控时，由总控统一监听所有群，并用 send_message 把消息投进各会话 ----
+hub_state() {   # 输出活动总控的状态文件路径
+  local f; for f in "$STATE_DIR"/*.json; do
+    [ -f "$f" ] && jq -e '.role == "hub" and .active == true' "$f" >/dev/null 2>&1 && { echo "$f"; return 0; }
+  done; return 1
+}
+router_active() { hub_state >/dev/null; }
+route_target() {   # <chat_id> → 「desktop_id<TAB>群名」，没有对应的活动会话时输出空
+  local f; for f in "$STATE_DIR"/*.json; do [ -f "$f" ] || continue
+    jq -r --arg c "$1" 'select(.chat_id == $c and .active == true and .role != "hub")
+      | [(.desktop_id // ("local_" + .session_id)), (.group_name // "")] | @tsv' "$f" 2>/dev/null
+  done | head -1
+}
+routed_chats() {   # 所有活动的非总控会话的群
+  local f; for f in "$STATE_DIR"/*.json; do [ -f "$f" ] || continue
+    jq -r 'select(.active == true and .role != "hub") | .chat_id // empty' "$f" 2>/dev/null
+  done | sort -u
+}

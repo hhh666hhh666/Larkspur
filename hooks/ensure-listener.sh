@@ -16,29 +16,39 @@ f=$(state_file "$sid")
 chat=$(jq -r '.chat_id // empty' "$f"); [ -n "$chat" ] || exit 0
 role=$(jq -r '.role // ""' "$f")
 
-missing() {   # 列出缺少的监听；刚启动的 Monitor 可能还没登记，给它几秒
-  local try out
+missing() {   # 列出缺少的监听；刚启动的 Monitor 可能还没登记，给它几秒。参数：群 ID、是否总控
+  local c="$1" h="$2" try out
   for try in 1 2 3 4; do
     out=""
-    listener_alive "$chat.msg" || out="$out msg"
-    [ "$role" = "hub" ] && { listener_alive "$chat.cards" || out="$out cards"; }
+    listener_alive "$c.msg" || out="$out msg"
+    [ -n "$h" ] && { listener_alive "$c.cards" || out="$out cards"; }
     [ -z "$out" ] && return 0
     [ "$try" -lt 4 ] && sleep 1
   done
   printf '%s' "$out"
 }
-need=$(missing)
-[ -n "$need" ] || exit 0
-
 H="${LARKSPUR_HOME:-$HOME/.claude/larkspur}"
+block() { jq -cn --arg r "$1" '{decision:"block", reason:$r}'; exit 0; }
+
 if [ "$role" = "hub" ]; then
-  steps="command \`$H/listen.sh $chat --with-cards\`，description \`飞书私聊（总控）\`，timeout_ms \`1800000\`"
-else
-  steps="command \`$H/listen.sh $chat\`，description \`飞书群消息（本会话）\`，timeout_ms \`1800000\`"
+  need=$(missing "$chat" 1); [ -n "$need" ] || exit 0
+  fs_log "listener-missing sid=$sid chat=$chat need=$need"
+  block "【Larkspur】本会话是飞书总控，但飞书监听已经停止（通常是进程重启或上下文压缩造成的）。请现在用 Monitor 重新启动：command \`$H/listen.sh $chat --hub\`，description \`飞书私聊（总控）\`，timeout_ms \`1800000\`。
+新监听会自动顶替旧监听，并补发中断期间漏掉的飞书消息（包括要转发给其他会话的）。启动后不要输出任何文字，直接结束本回合。"
 fi
 
+if hf=$(hub_state); then
+  # 路由模式：本会话的飞书消息由总控转发，只需确认总控的监听还活着
+  hchat=$(jq -r '.chat_id // empty' "$hf"); hdesk=$(jq -r '.desktop_id // ("local_" + .session_id)' "$hf")
+  need=$(missing "$hchat" 1); [ -n "$need" ] || exit 0
+  nag="$RUN_DIR/hub-nag"   # 多个会话同时发现时，5 分钟内只提醒一次
+  [ -f "$nag" ] && [ $(( $(date +%s) - $(cat "$nag") )) -lt 300 ] && exit 0
+  date +%s > "$nag"
+  fs_log "hub-listener-missing sid=$sid hub=$hdesk need=$need"
+  block "【Larkspur】飞书总控的监听已经停止，各会话暂时收不到飞书消息。请用 mcp__ccd_session_mgmt__send_message（未加载时先用 ToolSearch 加载）向 \`$hdesk\` 发送：「【Larkspur】总控的飞书监听已停止，请重新启动。」发送后不要输出任何文字，直接结束本回合。"
+fi
+
+need=$(missing "$chat" ""); [ -n "$need" ] || exit 0
 fs_log "listener-missing sid=$sid chat=$chat need=$need"
-reason="【Larkspur】本会话开着飞书同步，但飞书监听已经停止（通常是进程重启或上下文压缩造成的）。请现在用 Monitor 重新启动：$steps。
-新监听会自动顶替同名的旧监听，并补发中断期间漏掉的飞书消息。启动后不要输出任何文字，直接结束本回合。"
-jq -cn --arg r "$reason" '{decision:"block", reason:$r}'
-exit 0
+block "【Larkspur】本会话开着飞书同步，但飞书监听已经停止（通常是进程重启或上下文压缩造成的）。请现在用 Monitor 重新启动：command \`$H/listen.sh $chat\`，description \`飞书群消息（本会话）\`，timeout_ms \`1800000\`。
+新监听会自动顶替旧监听，并补发中断期间漏掉的飞书消息。启动后不要输出任何文字，直接结束本回合。"

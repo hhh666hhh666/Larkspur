@@ -11,6 +11,17 @@ case "$1 $2" in
       echo "[event] exited — received 3 event(s) (reason: timeout)" >&2
       exit 0
     fi
+    if [ "${FAKE_LARK_MODE:-}" = "router" ]; then    # 总控视角：私聊、两个群、一个不认识的群
+      echo "[event] ready event_key=im.message.receive_v1" >&2
+      m() { printf '{"chat_id":"%s","message_id":"%s","message_type":"%s","content":"%s"}\n' "$1" "$2" "$3" "$4"; }
+      m oc_h om_r1 text "私聊里的话";                       sleep 0.3
+      m oc_g om_r2 text "群里第一行\\n第二行";              sleep 0.3
+      m oc_g om_r3 image "[Image: img_v3_r3]";              sleep 0.3
+      m oc_g om_r4 text "这张图是什么";                     sleep 0.3
+      m oc_x om_r5 text "不认识的群";                       sleep 0.3
+      m oc_g om_r6 image "[Image: img_v3_r6]"
+      sleep 300; exit 0
+    fi
     if [ "${FAKE_LARK_MODE:-}" = "recover" ]; then   # 连上后收到一条实时消息，然后一直挂着
       echo "[event] ready event_key=im.message.receive_v1" >&2
       printf '{"message_id":"om_live1","message_type":"text","content":"实时消息"}\n'
@@ -36,6 +47,8 @@ case "$1 $2" in
       {"message_id":"om_botx","msg_type":"text","content":"机器人回复","deleted":false,"sender":{"id":"cli_app"}},
       {"message_id":"om_gap2","msg_type":"image","content":"[Image: img_v3_gap]","deleted":false,"sender":{"id":"ou_test"}}]}}' \
       | jq "$q" ;;
+  "im reactions")
+    [ -n "${FAKE_LARK_CALLS:-}" ] && printf '%s\n' "$*" >> "$FAKE_LARK_CALLS" ;;
   "api POST")
     [ -n "${FAKE_LARK_CALLS:-}" ] && printf '%s\n' "$*" >> "$FAKE_LARK_CALLS"
     echo '{"code":0}' ;;

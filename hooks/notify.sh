@@ -32,6 +32,8 @@ msg=$(printf '%s\n' "$msg" | awk '
   !started && /^[[:space:]]*$/ { next }
   { started=1; print }')
 [ -n "$msg" ] || exit 0
+# 总控转发消息后的占位回复（「—」）不发
+case "$(printf '%s' "$msg" | tr -d '[:space:]')" in —|-|"") exit 0 ;; esac
 
 # 去重：与上次发出的内容相同则不发
 hash=$(printf '%s' "$msg" | sha256sum | cut -c1-16)

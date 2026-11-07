@@ -33,7 +33,7 @@ sid=$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$sid" ] || fail "没有拿到会话 ID"
 
 # 2. 建专属群并写同步记录
-chat=$("$LARKSPUR_HOME/on.sh" "$sid" "$dir" "$title" 2>/dev/null) || fail "建群失败（会话 $sid 已创建）"
+chat=$("$LARKSPUR_HOME/on.sh" "$sid" "$dir" "$title" "local_$sid" 2>/dev/null) || fail "建群失败（会话 $sid 已创建）"
 
 # 3. 导入桌面端
 if command -v xdg-open >/dev/null; then opener=xdg-open; elif command -v open >/dev/null; then opener=open; else opener=""; fi
