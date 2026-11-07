@@ -33,8 +33,8 @@ if [ -z "$chat_id" ]; then
   fs_log "group-created sid=$sid chat=$chat_id"
 fi
 
-jq -n --arg sid "$sid" --arg chat "$chat_id" --arg cwd "$cwd" --arg t "$(date -Iseconds)" \
-   '{session_id:$sid, chat_id:$chat, cwd:$cwd, active:true, enabled_at:$t, last_sent_hash:""}' > "$f"
+jq -n --arg sid "$sid" --arg chat "$chat_id" --arg cwd "$cwd" --arg t "$(date -Iseconds)" --arg name "$name" \
+   '{session_id:$sid, chat_id:$chat, group_name:$name, cwd:$cwd, active:true, enabled_at:$t, last_sent_hash:""}' > "$f"
 
 "$LARK" im +messages-send --as bot --chat-id "$chat_id" \
   --markdown "**飞书同步已开启**
