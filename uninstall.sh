@@ -12,10 +12,10 @@ if [ -f "$SETTINGS" ] && command -v jq >/dev/null; then
   cp "$SETTINGS" "$SETTINGS.larkspur-bak.$(date +%Y%m%d%H%M%S)"
   tmp=$(mktemp)
   jq --arg stop "$DEST/hooks/notify.sh" --arg end "$DEST/hooks/session-end.sh" --arg ensure "$DEST/hooks/ensure-listener.sh" \
-     --arg start "$DEST/hooks/session-start.sh" '
+     --arg start "$DEST/hooks/session-start.sh" --arg wait "$DEST/hooks/hub-wait.sh" '
     def strip($c): map(select(([.hooks[]?.command] | index($c)) | not));
     if .hooks then
-      .hooks.Stop       = ((.hooks.Stop // [])       | strip($stop) | strip($ensure))
+      .hooks.Stop       = ((.hooks.Stop // [])       | strip($stop) | strip($ensure) | strip($wait))
       | .hooks.SessionEnd = ((.hooks.SessionEnd // []) | strip($end))
       | .hooks.SessionStart = ((.hooks.SessionStart // []) | strip($start))
       | .hooks |= with_entries(select(.value | length > 0))
@@ -39,7 +39,7 @@ if command -v systemctl >/dev/null; then
   rm -f "$HOME/.config/systemd/user/larkspur.service"; systemctl --user daemon-reload 2>/dev/null || true
 fi
 [ -f "$DEST/run/daemon.json" ] && kill "$(jq -r '.pid // empty' "$DEST/run/daemon.json" 2>/dev/null)" 2>/dev/null || true
-rm -f "$DEST/larkspurd.py" "$DEST/larkspurctl.sh" "$DEST/listen-inbox.sh" "$HOME/.local/share/applications/larkspur.desktop" ${desk:+"$desk/Larkspur.desktop"}
+rm -f "$DEST/larkspurd.py" "$DEST/larkspurctl.sh" "$DEST/listen-inbox.sh" "$DEST/listen-wait.sh" "$HOME/.local/share/applications/larkspur.desktop" ${desk:+"$desk/Larkspur.desktop"}
 rm -rf "$DEST/web"
 say "已移除常驻服务"
 rm -rf "$DEST/hooks" "$DEST/run"

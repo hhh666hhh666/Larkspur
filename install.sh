@@ -56,16 +56,20 @@ stop_cmd="$DEST/hooks/notify.sh"
 end_cmd="$DEST/hooks/session-end.sh"
 ensure_cmd="$DEST/hooks/ensure-listener.sh"
 start_cmd="$DEST/hooks/session-start.sh"
+wait_cmd="$DEST/hooks/hub-wait.sh"
+# 总控按需唤醒：hub-wait.sh 和 session-start.sh 在后台等飞书事件，最长等 7 天（listen-wait.sh 到期前自己续期）
+wait_timeout=604800
 tmp=$(mktemp)
-jq --arg stop "$stop_cmd" --arg end "$end_cmd" --arg ensure "$ensure_cmd" --arg start "$start_cmd" '
+jq --arg stop "$stop_cmd" --arg end "$end_cmd" --arg ensure "$ensure_cmd" --arg start "$start_cmd" --arg wait "$wait_cmd" --argjson wt "$wait_timeout" '
   def strip($c): map(select(([.hooks[]?.command] | index($c)) | not));
   .hooks //= {}
-  | .hooks.Stop       = ((.hooks.Stop // [])       | strip($stop) | strip($ensure))
+  | .hooks.Stop       = ((.hooks.Stop // [])       | strip($stop) | strip($ensure) | strip($wait))
                         + [{hooks:[{type:"command", command:$stop, async:true, timeout:30}]},
-                           {hooks:[{type:"command", command:$ensure, timeout:10}]}]
+                           {hooks:[{type:"command", command:$ensure, timeout:10}]},
+                           {hooks:[{type:"command", command:$wait, asyncRewake:true, timeout:$wt}]}]
   | .hooks.SessionEnd = ((.hooks.SessionEnd // []) | strip($end))  + [{hooks:[{type:"command", command:$end, timeout:15}]}]
   | .hooks.SessionStart = ((.hooks.SessionStart // []) | strip($start))
-                        + [{hooks:[{type:"command", command:$start, asyncRewake:true, timeout:90}]}]
+                        + [{hooks:[{type:"command", command:$start, asyncRewake:true, timeout:$wt}]}]
 ' "$SETTINGS" > "$tmp"
 jq -e . "$tmp" >/dev/null && mv "$tmp" "$SETTINGS"
 say "钩子已写入 $SETTINGS（原文件已备份）"

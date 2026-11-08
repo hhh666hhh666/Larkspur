@@ -22,7 +22,8 @@
 
 - **在飞书里新建会话**：把一个会话设为总控（`/feishu hub`），在和机器人的私聊里发 `新会话 <目录> [标题]`，或发 `新会话` 后在表单卡片里选目录，就会在该目录新建一个 Claude Code 会话、建好它的专属群，并导入桌面端侧边栏（桌面端没开时只建会话不导入，不会把桌面端拉起来）。
 - **统一转发**：所有群的消息由一路监听收下，再由总控投进对应会话。**必须有总控**：普通会话不允许自己监听。
-- **桌面端重启后自动恢复**：桌面端启动、总控会话被拉起时，SessionStart 钩子自动让它恢复读取飞书事件；总控会话没被拉起时，由一个开着同步的会话把它叫起来。
+- **按需唤醒，空闲不花 token**：总控不挂 Monitor。每个回合结束时，Stop 钩子在后台等事件队列，有飞书消息、卡片提交、要转发的群消息时才唤醒总控处理；没有消息时不调用模型，也没有每半小时的续期回合（约 7 天续期一次）。
+- **桌面端重启后自动恢复**：桌面端启动、总控会话被拉起时，SessionStart 钩子直接开始等事件，不调用模型；中断期间排队的事件立刻交给总控。总控会话没被拉起时，由一个开着同步的会话把它叫起来。
 
 ### 常驻服务 Larkspur 与本地网页控制台
 
@@ -61,7 +62,7 @@
 
 ### 依赖
 
-- 只用到官方的 [`lark-cli`](https://www.npmjs.com/package/@larksuite/cli)、Claude Code 自带的钩子、技能与 Monitor 工具，以及系统自带的 bash、jq、curl、Python 3（标准库）。网络检测的数据来自 ip.net.coffee。
+- 只用到官方的 [`lark-cli`](https://www.npmjs.com/package/@larksuite/cli)、Claude Code 自带的钩子与技能，以及系统自带的 bash、jq、curl、Python 3（标准库）。网络检测的数据来自 ip.net.coffee。
 
 ## 工作原理
 
@@ -80,14 +81,14 @@ Claude Code 会话 ◄──────────────► on.sh：机�
      │
      │ send_message（消息气泡）
      │
-总控会话 ◄── Monitor（listen-inbox.sh 读事件队列）◄── 常驻服务 Larkspur（listen.sh --hub：一路 lark-cli 长连接，按发送者过滤，下载图片）◄── 飞书：私聊 + 各会话的群
+总控会话 ◄── 钩子在后台等事件，有事件才唤醒（listen-wait.sh 读事件队列）◄── 常驻服务 Larkspur（listen.sh --hub：一路 lark-cli 长连接，按发送者过滤，下载图片）◄── 飞书：私聊 + 各会话的群
                                                          └── 本地网页控制台 http://localhost:<随机端口>/、每分钟网络检测、IP 守卫
 ```
 
 | 文件 | 作用 |
 |---|---|
 | `lib/on.sh` / `lib/off.sh` | 开启、关闭会话同步，建群或复用已有的群 |
-| `lib/listen.sh` | 监听飞书消息，供 Monitor 使用，每行输出一个事件；`--hub` 时同时监听卡片、转发其他会话的群消息 |
+| `lib/listen.sh` | 监听飞书消息（由常驻服务运行），每行输出一个事件；`--hub` 时同时监听卡片、转发其他会话的群消息 |
 | `lib/hub-on.sh` | 把会话设为总控，同步对象是你和机器人的私聊 |
 | `lib/spawn.sh` | 总控用：后台新建会话、建群，并用 `claude://resume?session=<id>` 导入桌面端 |
 | `lib/card-new.sh` / `lib/card-update.sh` | 总控用：发「新建会话」表单卡片，并按结果更新卡片 |
@@ -100,20 +101,22 @@ Claude Code 会话 ◄──────────────► on.sh：机�
 | `lib/ipguard.sh` | IP 守卫：出口 IP 不符时提醒并运行守卫命令（会话启动时、每次网络检测刷新后） |
 | `lib/desktop-start.sh` | 手动启动桌面端（网页、飞书卡片上的按钮），经过启动闸门 |
 | `lib/desktop-gate.sh` | 桌面端启动闸门，装为 `~/.local/bin/claude-desktop`：三个出口 IP 都相符才启动桌面端 |
-| `hooks/session-start.sh` | SessionStart 钩子：会话启动时跑 IP 守卫；桌面端拉起总控会话时自动让它启动飞书监听 |
+| `hooks/session-start.sh` | SessionStart 钩子：会话启动时跑 IP 守卫；桌面端拉起总控会话时直接开始等飞书事件 |
+| `hooks/hub-wait.sh` | Stop 钩子（后台）：总控每个回合结束时开始等飞书事件，有事件才唤醒总控 |
 | `lib/larkspurd.py` | 常驻服务：飞书监听、每分钟网络检测与 IP 守卫、本地网页控制台（`lib/web/index.html`） |
 | `lib/larkspurctl.sh` | 启动、关闭、查看常驻服务；`open` 启动并在浏览器打开控制台（桌面「Larkspur」图标） |
-| `lib/listen-inbox.sh` | 总控用 Monitor 运行：读常驻服务写下的事件队列 |
+| `lib/listen-wait.sh` | 总控的钩子在后台运行：等常驻服务写下的事件队列，有事件就交给总控 |
+| `lib/listen-inbox.sh` | 已停用（旧版总控的 Monitor）：只告诉还按老办法运行的总控停下 |
 | `lib/listen-menu.sh` | 总控用：响应机器人菜单「控制台」 |
 | `lib/mode.sh` | 输出当前有没有总控在转发（router / none） |
 | `hooks/notify.sh` | Stop 钩子：只给开启了同步的会话，把最终回复发到对应的群 |
-| `hooks/ensure-listener.sh` | Stop 钩子：总控的监听停了（进程重启、上下文压缩）就让总控重新启动；没有总控时在群里提醒 |
+| `hooks/ensure-listener.sh` | Stop 钩子：普通会话发现总控没在接收事件就提醒总控；没有总控、Larkspur 没在运行时在群里提醒 |
 | `hooks/session-end.sh` | SessionEnd 钩子：只在 `/clear`、登出时关闭同步，进程退出时保留 |
 | `skill/SKILL.md` | `/feishu on \| off` 技能，告诉 Claude 如何处理飞书事件 |
 
 ## 前置条件
 
-1. **Claude Code**，需要 Monitor 工具，最好是桌面端，这样能读到会话标题。
+1. **Claude Code**，需要支持 `asyncRewake` 的钩子，最好是桌面端，这样能读到会话标题。
 2. **jq**、**bash**。
 3. **lark-cli** 已安装并登录：
 
@@ -201,7 +204,7 @@ cd Larkspur
 
 不需要 Claude 的部分都在常驻服务 **Larkspur**（`larkspurd`，Python 标准库，systemd 用户服务）里运行，不依赖 Claude 桌面端：
 
-- **飞书监听**：有总控时，服务运行 `listen.sh <总控私聊> --hub`（私聊、卡片、菜单、群消息转发），到时或意外退出后自动重启。每行事件写进队列 `run/hub-queue`，总控会话用 Monitor 运行 `listen-inbox.sh` 读取，读完即清空。桌面端重启、总控上下文压缩时事件排在队列里，总控回来后一次补上。
+- **飞书监听**：有总控时，服务运行 `listen.sh <总控私聊> --hub`（私聊、卡片、菜单、群消息转发），到时或意外退出后自动重启。每行事件写进队列 `run/hub-queue`，总控会话的钩子在后台运行 `listen-wait.sh` 等着，有事件就取走（队列随即清空）并唤醒总控。桌面端重启、总控上下文压缩时事件排在队列里，总控回来后一次补上。
 - **每分钟网络检测、刷新飞书控制台、运行中 IP 守卫**。
 - **本地网页控制台**：浏览器打开 `http://localhost:<端口>/`（随机高位端口，见下），可以看状态、网络检测、开关 IP 闸门、改期望 IP、关闭会话同步、改功能选项，以及**关闭 Larkspur**。只监听 127.0.0.1；写操作要带自定义请求头并校验 Host 和 Origin，别的网页没法让浏览器替它关软件或改设置。
 
@@ -267,10 +270,10 @@ cd Larkspur
 ## 已知限制
 
 - **转发要靠总控会话**：飞书监听在常驻服务里，不会因桌面端重启而断；但把消息投进各会话要用桌面端工具，只能由总控会话做。总控停着时事件排在队列里，总控回来后补上。
-- **Monitor 最长 30 分钟**：总控读队列的 Monitor 到期后 Claude 会自动续期，续期的回合不输出文字，也不会发飞书，要花总控 2 次模型调用。
+- **总控处理时稍有延迟**：总控正在处理一个回合时，新到的事件要等这个回合结束才交给它（通常几秒）。
 - **资源占用**：常驻服务一个 Python 进程，加上消息、卡片、菜单各一个 lark-cli 进程（每个约 15～20 MB），空闲时几乎不占 CPU（直接调用 lark-cli 的 Go 程序，跳过 npm 的 node 启动壳）。
 - **只同步每轮的最终回复**：中间过程和工具调用不会发到飞书。
-- **依赖总控**：总控停了，所有会话都收不到飞书消息（其他会话回合结束时，Stop 钩子会提醒总控重启读取）。每条转发要花总控一次模型调用，会读一遍总控的上下文，总控的上下文越短越省，可以定期清空总控的对话。
+- **依赖总控**：总控停了，所有会话都收不到飞书消息（其他会话回合结束时，Stop 钩子会提醒总控）。每条转发要花总控一次模型调用，会读一遍总控的上下文，总控的上下文越短越省，可以定期清空总控的对话。
 - **气泡带来源标记**：转发的消息显示为"来自 飞书总控"的用户消息，不完全等同于你亲手输入。
 - 群名只在开启时同步一次。会话标题之后改了，再执行一次 `/feishu on` 即可更新群名。
 
@@ -297,7 +300,7 @@ tests/test-recover.sh  # 监听顶替、断线补发、Stop 钩子提醒重启�
 
 ## English summary
 
-Larkspur bridges individual Claude Code sessions to Feishu/Lark. Run `/feishu on` in a session and a bot creates a dedicated Feishu group for it. Claude's final reply each turn is posted to the group, and your messages and images in that group are relayed into the session by a hub session (`/feishu hub`), which runs the only listener; individual sessions never listen on their own. Each session gets its own group, so conversations never mix. It uses only the official `lark-cli`, Claude Code hooks, a skill and the Monitor tool. Only messages from your own open_id in the session's group are accepted. Enabling it authorizes Claude to act on those messages as if you had typed them, so read the security notes above. Install with `./install.sh`, remove with `./uninstall.sh`.
+Larkspur bridges individual Claude Code sessions to Feishu/Lark. Run `/feishu on` in a session and a bot creates a dedicated Feishu group for it. Claude's final reply each turn is posted to the group, and your messages and images in that group are relayed into the session by a hub session (`/feishu hub`), which runs the only listener; individual sessions never listen on their own. Each session gets its own group, so conversations never mix. It uses only the official `lark-cli`, Claude Code hooks and a skill. The hub is woken only when an event arrives, so an idle hub costs no model calls. Only messages from your own open_id in the session's group are accepted. Enabling it authorizes Claude to act on those messages as if you had typed them, so read the security notes above. Install with `./install.sh`, remove with `./uninstall.sh`.
 
 ## 许可证
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 用法：listen.sh <chat_id> [--hub]
 # 由常驻服务 larkspurd 运行：stdout 每行是一个事件，larkspurd 把它们追加到 run/hub-queue，
-# 总控会话用 Monitor 运行 listen-inbox.sh 读取。也可以直接放在 Monitor 里运行（旧用法）。
+# 总控会话的钩子在后台运行 listen-wait.sh 读取，有事件才唤醒总控。
 #
 # 只有总控能监听（--hub，旧写法 --with-cards 等同）。普通会话不允许各自监听：
 # 不带 --hub 启动时输出一行「飞书监听状态: …」后直接退出，各会话的群消息一律由总控转发。
@@ -37,7 +37,7 @@ fi
 
 # 飞书监听已交给常驻服务时，别处（例如总控旧的 Monitor）再启动的监听不能顶替服务的那一个，否则两边会来回抢
 if [ -z "${LARKSPUR_DAEMON:-}" ] && daemon_alive; then
-  printf '飞书监听状态: 飞书监听已交给 Larkspur 常驻服务，本 Monitor 不再需要。请改用 Monitor 运行：command `%s`，description `飞书私聊（总控）`，timeout_ms `1800000`；以后到期续期时也用它，不要再运行 listen.sh。启动后不要输出任何文字。\n' "$LARKSPUR_HOME/listen-inbox.sh"
+  printf '飞书监听状态: 飞书监听已交给 Larkspur 常驻服务，总控改为按需唤醒，有消息时会自动送进本会话，不再需要 Monitor。不要再启动或续期这个 Monitor，不要输出任何文字，直接结束本回合。\n'
   fs_log "listen-refused chat=$chat reason=daemon"
   exit 0
 fi

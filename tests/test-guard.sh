@@ -71,14 +71,16 @@ check "闸门：没有配置期望 IP 时直接放行" '[ $r = 0 ] && [ -f "$TMP
 reset
 jq -n '{session_id:"hubsid", desktop_id:"local_hub", chat_id:"oc_hub", active:true, role:"hub"}' > "$TMP/sessions/hubsid.json"
 jq -n '{session_id:"g", desktop_id:"local_g", chat_id:"oc_g", active:true}' > "$TMP/sessions/g.json"
-err=$(echo '{"session_id":"hubsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
-check "桌面端拉起总控会话、事件读取没在跑时唤醒它启动" '[ $r = 2 ] && printf "%s" "$err" | grep -q "listen-inbox.sh"'
-err=$(echo '{"session_id":"newsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
-check "总控换了会话 ID 也能按桌面端会话 ID 认出来" '[ $r = 2 ]'
-bash -c 'exec -a listen-fake sleep 300' & lp=$!; echo "$lp" > "$TMP/run/inbox.pid"   # 让总控的事件读取看起来活着
-err=$(echo '{"session_id":"hubsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
-check "总控的事件读取已在跑时不唤醒" '[ $r = 0 ]'
-kill "$lp" 2>/dev/null; rm -f "$TMP/run/inbox.pid"
+mkdir -p "$TMP/run"; echo '飞书消息（用户，text）: 停机时发的' > "$TMP/run/hub-queue"
+err=$(echo '{"session_id":"hubsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub timeout 10 bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
+check "桌面端拉起总控会话：钩子直接等事件，停机期间排队的事件立刻交给总控" '[ $r = 2 ] && printf "%s" "$err" | grep -q "停机时发的" && ! printf "%s" "$err" | grep -q "Monitor 启动"'
+echo '飞书消息（用户，text）: 换 ID 后' > "$TMP/run/hub-queue"
+err=$(echo '{"session_id":"newsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub timeout 10 bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
+check "总控换了会话 ID 也能按桌面端会话 ID 认出来" '[ $r = 2 ] && printf "%s" "$err" | grep -q "换 ID 后"'
+start=$(date +%s)
+echo '{"session_id":"hubsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub LARKSPUR_WAIT_SECONDS=2 timeout 10 bash "$TMP/session-start.sh" 2>/dev/null; r=$?
+check "没有排队的事件时不唤醒总控，一直等到有事件（这里到期续期）" '[ $r = 2 ] && [ $(( $(date +%s) - start )) -ge 2 ]'
+rm -f "$TMP/run/inbox.handoff"
 err=$(echo '{"session_id":"g"}' | LARKSPUR_HUB_RELAY_DELAY=0 CLAUDE_CODE_HOST_SESSION_ID=local_g bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
 check "总控没被拉起时，由开着同步的会话转告总控" '[ $r = 2 ] && printf "%s" "$err" | grep -q "local_hub"'
 err=$(echo '{"session_id":"g"}' | LARKSPUR_HUB_RELAY_DELAY=0 CLAUDE_CODE_HOST_SESSION_ID=local_g bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?

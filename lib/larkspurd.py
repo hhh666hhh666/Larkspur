@@ -3,8 +3,8 @@
 
 它负责：
   1. 飞书监听：有活动的总控记录时，运行 listen.sh <总控私聊> --hub（私聊消息、卡片、菜单、群消息转发），
-     到时（29 分钟）或意外退出后自动重启；输出的每一行事件追加到 run/hub-queue，由总控会话用
-     listen-inbox.sh 读取。桌面端或总控会话停着时事件不会丢，排在队列里等总控回来。
+     到时（29 分钟）或意外退出后自动重启；输出的每一行事件追加到 run/hub-queue，总控会话的钩子
+     在后台运行 listen-wait.sh 读取，有事件才唤醒总控。桌面端或总控会话停着时事件不会丢，排在队列里等总控回来。
   2. 每分钟网络检测、刷新飞书控制台、跑 IP 守卫（netwatch.sh）。
   3. 本地网页控制台：只监听 127.0.0.1，端口第一次启动时在 20000～60999 里随机挑一个并记进 config.sh
      （LARKSPUR_WEB_PORT），之后固定不变；被占用时重新随机挑。
@@ -88,6 +88,17 @@ def hub():
     return None, None
 
 
+def hub_reader_ok():
+    """与 common.sh 的 hub_reader_ok 一致：等待进程在跑，或刚把事件交给总控（10 分钟内）。"""
+    if pid_alive("inbox"):
+        return True
+    try:
+        t = int(open(os.path.join(RUN, "inbox.handoff")).read().strip())
+    except (OSError, ValueError):
+        return False
+    return time.time() - t < int(os.environ.get("LARKSPUR_HANDOFF_GRACE", "600"))
+
+
 def pid_alive(name):
     """run/<name>.pid 里的进程是否还活着（与 common.sh 的 listener_alive 一致：命令行里要有 listen）。"""
     try:
@@ -99,7 +110,7 @@ def pid_alive(name):
 
 
 def append_queue(line):
-    """追加一行事件给总控；与 listen-inbox.sh 共用 flock，读完后它会清空文件。"""
+    """追加一行事件给总控；与 listen-wait.sh 共用 flock，读完后它会清空文件。"""
     with open(QUEUE + ".lock", "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         with open(QUEUE, "a") as q:
@@ -201,7 +212,7 @@ def state():
         "port_note": SERVER_INFO.get("note", ""),
         "hub_chat": chat, "hub_desktop": desk,
         "listener": bool(lc and lc.running()), "listener_restarts": LISTENER["restarts"],
-        "hub_reader": pid_alive("inbox"),
+        "hub_reader": hub_reader_ok(),
         "queue_pending": queue_pending(),
         "netwatch": NETWATCH.running(),
     }

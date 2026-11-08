@@ -20,7 +20,13 @@ fi
 [ -n "$launcher" ] && [ -x "$launcher" ] || { echo "找不到 Claude 桌面端" >&2; exit 1; }
 
 fs_log "desktop-start source=${1:-cli}"
-if [ -z "${LARKSPUR_NO_SYSTEMD:-}" ] && command -v systemd-run >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
+scope=""; [ -z "${LARKSPUR_NO_SYSTEMD:-}" ] && command -v systemd-run >/dev/null && systemctl --user show-environment >/dev/null 2>&1 && scope=1
+# 桌面端（以及它里面的每个 Claude 会话）不能继承 Larkspur 服务的环境：从飞书卡片点按钮时本脚本运行在服务的监听进程里，
+# 带着 LARKSPUR_DAEMON=1（会让 listen.sh 以为自己是服务的监听）和 systemd 给 larkspur.service 设的变量
+for v in $(compgen -e); do
+  case "$v" in LARKSPUR_*|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MEMORY_PRESSURE_WATCH|MEMORY_PRESSURE_WRITE|MANAGERPID) unset "$v" ;; esac
+done
+if [ -n "$scope" ]; then
   setsid -f systemd-run --user --scope --collect --quiet --unit="app-com.anthropic.Claude-larkspur-$(date +%s)" \
     -- "$launcher" </dev/null >/dev/null 2>&1
 else

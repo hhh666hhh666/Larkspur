@@ -27,7 +27,7 @@ waitfor "$TMP/a.out" "实时消息"
 check "首次启动不补发" '! grep -q "补发" "$TMP/a.out"'
 check "连上时不输出就绪" '! grep -q "就绪" "$TMP/a.out"'
 check "监听登记了 pid" '[ "$(cat "$TMP/run/oc_t.msg.pid")" = "$A" ]'
-LARKSPUR_INBOX_SECONDS=300 bash "$TMP/listen-inbox.sh" > "$TMP/inbox.out" 2>&1 & IN=$!; sleep 0.5
+LARKSPUR_WAIT_SECONDS=300 bash "$TMP/listen-wait.sh" s1 > "$TMP/inbox.out" 2>&1 & IN=$!; sleep 0.5
 check "总控的事件读取活着时钩子放行" '[ -z "$(hook)" ]'
 a_kids=$(tree "$A" | tail -n +2 | tr '\n' ' ')
 
@@ -42,8 +42,7 @@ check "已处理的实时消息不重复" '! grep -q "实时消息" "$TMP/b.out"
 
 kill_tree "$B"; kill_tree "$IN"; sleep 0.3
 out=$(hook)
-check "总控的事件读取停了时钩子拦下并给出 listen-inbox.sh 重启命令" 'printf "%s" "$out" | jq -e ".decision==\"block\" and (.reason|contains(\"listen-inbox.sh\"))" >/dev/null'
-check "第二次（stop_hook_active）放行" '[ -z "$(hook true)" ]'
+check "总控的事件读取停了时，同步的 Stop 钩子也不拦（由后台的 hub-wait.sh 恢复，不调用模型）" '[ -z "$out" ]'
 # 没有总控时：普通会话不被要求自己监听，只在群里提醒开总控
 jq '.role=""' "$TMP/sessions/s1.json" > "$TMP/x" && mv "$TMP/x" "$TMP/sessions/s1.json"
 export FAKE_LARK_CALLS="$TMP/calls0"; : > "$TMP/calls0"

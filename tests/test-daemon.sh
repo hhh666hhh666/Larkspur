@@ -2,6 +2,7 @@
 # 离线测试常驻服务 larkspurd 和本地网页控制台：用假 lark-cli，网页端口由系统随机分配，不碰真的服务。
 # 用法：tests/test-daemon.sh   （约 20 秒）
 set -u
+unset LARKSPUR_DAEMON   # 测试在服务拉起的桌面端里运行时会带着它
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
 cp "$ROOT"/lib/*.sh "$ROOT"/lib/larkspurd.py "$TMP/"; mkdir -p "$TMP/web" "$TMP/sessions"; cp "$ROOT"/lib/web/index.html "$TMP/web/"
@@ -26,10 +27,10 @@ out2=$(python3 "$TMP/larkspurd.py")
 check "同时只运行一个：再启动一次直接说已在运行" 'printf "%s" "$out2" | grep -q "已在运行"'
 waitfor 'grep -q "只发了图片" "$TMP/run/hub-queue" 2>/dev/null'
 check "飞书事件写进给总控的队列（私聊消息、卡片提交、群消息转发）" 'grep -q "^飞书消息（用户，text）: 私聊里的话" "$TMP/run/hub-queue" && grep -q "^飞书卡片提交: " "$TMP/run/hub-queue" && [ "$(grep -c "^飞书转发: " "$TMP/run/hub-queue")" = 3 ]'
-in=$(LARKSPUR_INBOX_SECONDS=2 bash "$TMP/listen-inbox.sh")
-check "总控读队列：原样输出全部事件后清空队列" '[ "$(printf "%s\n" "$in" | grep -c "^飞书转发: ")" = 3 ] && [ ! -s "$TMP/run/hub-queue" ]'
-in=$(LARKSPUR_INBOX_SECONDS=2 bash "$TMP/listen-inbox.sh")
-check "读过的事件不会再读一次" '[ -z "$in" ]'
+in=$(LARKSPUR_WAIT_SECONDS=3 bash "$TMP/listen-wait.sh" h local_h 2>&1 >/dev/null); r=$?
+check "总控按需唤醒：以退出码 2 原样交出全部事件后清空队列" '[ $r = 2 ] && [ "$(printf "%s\n" "$in" | grep -c "^飞书转发: ")" = 3 ] && [ ! -s "$TMP/run/hub-queue" ]'
+in=$(LARKSPUR_WAIT_SECONDS=2 bash "$TMP/listen-wait.sh" h local_h 2>&1 >/dev/null)
+check "交过的事件不会再交一次" '! printf "%s" "$in" | grep -q "^飞书"'
 
 st=$(curl -s "$U/api/state")
 check "网页：状态接口有服务、监听和会话信息" 'printf "%s" "$st" | jq -e ".daemon.listener == true and .daemon.hub_chat == \"oc_h\" and (.sessions | length) == 2" >/dev/null'
@@ -60,7 +61,7 @@ waitfor 'listener_alive oc_h.msg'
 
 # 桌面端只能手动启动：按钮经过启动器启动它；已在运行时不重复启动；关掉 Larkspur 不连带关掉它
 mkdir -p "$TMP/bin"; cp "$(command -v bash)" "$TMP/bin/fakedesk"   # 假桌面端：进程名为 fakedesk（sleep 可能是 coreutils 多合一程序，改名后不能运行）
-printf '#!/usr/bin/env bash\necho "$*" >> "%s/desk-launched"\nexec "%s/bin/fakedesk" -c "sleep 120; true"\n' "$TMP" "$TMP" > "$TMP/bin/launcher"; chmod +x "$TMP/bin/launcher"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/desk-launched"\necho "daemon-env:${LARKSPUR_DAEMON:-none}" >> "%s/desk-launched"\nexec "%s/bin/fakedesk" -c "sleep 120; true"\n' "$TMP" "$TMP" "$TMP" > "$TMP/bin/launcher"; chmod +x "$TMP/bin/launcher"
 export LARKSPUR_DESKTOP_COMM=fakedesk LARKSPUR_DESKTOP_LAUNCHER="$TMP/bin/launcher"
 "$TMP/larkspurctl.sh" restart >/dev/null; P=$(jq -r .port "$TMP/run/daemon.json"); U="http://localhost:$P"
 check "桌面端没在运行时状态显示没在运行，飞书卡片上有「启动桌面端」按钮" '[ "$(curl -s "$U/api/state" | jq -r .desktop)" = stopped ] && bash "$TMP/console.sh" render status | grep -q "启动桌面端"'
@@ -68,21 +69,22 @@ r=$(post /api/desktop/start '{}')
 waitfor '[ "$(desktop_state)" = running ]'
 check "网页：点「启动桌面端」后桌面端启动" 'printf "%s" "$r" | jq -e .ok >/dev/null && [ "$(desktop_state)" = running ] && grep -q "desktop-start source=web" "$TMP/larkspur.log"'
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "X-Larkspur: 1" "$U/api/desktop/start" -d '{}')
-check "已在运行时不会再启动一个" '[ "$code" = 409 ] && [ "$(wc -l < "$TMP/desk-launched")" = 1 ]'
+check "已在运行时不会再启动一个" '[ "$code" = 409 ] && [ "$(grep -c "^daemon-env:" "$TMP/desk-launched")" = 1 ]'
 check "桌面端在运行时飞书卡片上没有启动按钮" '! bash "$TMP/console.sh" render status | grep -q "启动桌面端"'
 dk=$(pgrep -x fakedesk | head -1)
 "$TMP/larkspurctl.sh" restart >/dev/null; P=$(jq -r .port "$TMP/run/daemon.json"); U="http://localhost:$P"
 check "关掉或重启 Larkspur 不会连带关掉桌面端" 'kill -0 "$dk" 2>/dev/null'
 kill "$dk"; waitfor '[ "$(desktop_state)" = stopped ]'
 sleep 3
-check "桌面端退出后不会被自动拉起" '[ "$(desktop_state)" = stopped ] && [ "$(wc -l < "$TMP/desk-launched")" = 1 ]'
+check "桌面端退出后不会被自动拉起" '[ "$(desktop_state)" = stopped ] && [ "$(grep -c "^daemon-env:" "$TMP/desk-launched")" = 1 ]'
 : > "$TMP/calls"; bash "$TMP/console.sh" action '{"lk":"c","op":"desktop"}' >/dev/null 2>&1
 waitfor '[ "$(desktop_state)" = running ]'
 check "飞书卡片：点「启动桌面端」后桌面端启动，卡片提示正在启动" '[ "$(desktop_state)" = running ] && grep -q "desktop-start source=feishu" "$TMP/larkspur.log" && grep -qE "api PATCH|messages-send" "$TMP/calls"'
+check "从飞书卡片启动的桌面端不继承服务监听进程的 LARKSPUR_DAEMON" '! grep -q "daemon-env:1" "$TMP/desk-launched" && grep -q "daemon-env:none" "$TMP/desk-launched"'
 pkill -x fakedesk
 lp=$(cat "$TMP/run/oc_h.msg.pid")
 out=$(timeout 5 bash "$TMP/listen.sh" oc_h --hub)
-check "服务在跑时，总控旧的 Monitor 再起 listen.sh 不会顶替服务的监听，并让总控改用 listen-inbox.sh" 'printf "%s" "$out" | grep -q "listen-inbox.sh" && [ "$(cat "$TMP/run/oc_h.msg.pid")" = "$lp" ] && listener_alive oc_h.msg'
+check "服务在跑时，总控旧的 Monitor 再起 listen.sh 不会顶替服务的监听，并告诉总控不再需要 Monitor" 'printf "%s" "$out" | grep -q "按需唤醒" && [ "$(cat "$TMP/run/oc_h.msg.pid")" = "$lp" ] && listener_alive oc_h.msg'
 dp=$(jq -r .pid "$TMP/run/daemon.json")
 r=$(post /api/stop '{}')
 waitfor '! kill -0 "$dp" 2>/dev/null'

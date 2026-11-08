@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# 离线测试总控按需唤醒：后台等待进程（listen-wait.sh）有事件才以退出码 2 交出、空闲时到期续期、
+# 新的顶替旧的、Claude 进程没了或不再是总控时安静退出、中途被杀的事件不丢；以及 hub-wait.sh 钩子只管总控。
+# 用法：tests/test-wait.sh   （约 20 秒）
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d)
+cp "$ROOT"/lib/*.sh "$TMP/"; mkdir -p "$TMP/hooks" "$TMP/sessions" "$TMP/run"; cp "$ROOT"/hooks/*.sh "$TMP/hooks/"
+chmod +x "$TMP"/*.sh "$TMP"/hooks/*.sh
+export LARKSPUR_HOME="$TMP" LARKSPUR_LARK_CLI="$ROOT/tests/fake-lark.sh" LARKSPUR_OPEN_ID=ou_test LARKSPUR_WAIT_CHECK=1
+. "$TMP/common.sh"
+cleanup() { pkill -f "$TMP/" 2>/dev/null; rm -rf "$TMP"; }
+trap cleanup EXIT
+fail=0
+check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
+waitfor() { local i; for i in $(seq 1 50); do eval "$1" && return 0; sleep 0.2; done; return 1; }
+Q="$TMP/run/hub-queue"
+W="$TMP/listen-wait.sh"
+jq -n '{session_id:"h", desktop_id:"local_h", chat_id:"oc_h", active:true, role:"hub"}' > "$TMP/sessions/h.json"
+jq -n '{session_id:"g", desktop_id:"local_g", chat_id:"oc_g", active:true}' > "$TMP/sessions/g.json"
+
+timeout 5 bash "$W" g local_g 2>/dev/null; r=$?
+check "不是总控的会话：直接退出，不登记" '[ $r = 0 ] && [ ! -f "$TMP/run/inbox.pid" ]'
+
+printf '飞书消息（用户，text）: 第一条\n飞书转发: {"to":"local_g"}\n' > "$Q"
+err=$(timeout 10 bash "$W" h local_h 2>&1 >/dev/null); r=$?
+check "有事件：以退出码 2 一次交出全部事件" '[ $r = 2 ] && printf "%s\n" "$err" | grep -q "^【Larkspur】飞书事件（2 条" && printf "%s\n" "$err" | grep -q "^飞书消息（用户，text）: 第一条$" && printf "%s\n" "$err" | grep -q "^飞书转发: "'
+check "交出后队列清空，不留 hub-taken 文件" '[ ! -s "$Q" ] && ! ls "$TMP/run"/hub-taken.* >/dev/null 2>&1'
+check "交出后总控处理期间仍算在接收（不会被普通会话误报停了）" '[ ! -f "$TMP/run/inbox.pid" ] && hub_reader_ok'
+check "交出超过宽限时间还没回来就算停了" '! LARKSPUR_HANDOFF_GRACE=0 hub_reader_ok'
+
+start=$(date +%s)
+err=$(LARKSPUR_WAIT_SECONDS=2 timeout 10 bash "$W" h local_h 2>&1 >/dev/null); r=$?
+check "没有事件时一直等着（不调用模型），到期才唤醒一次续期" '[ $r = 2 ] && [ $(( $(date +%s) - start )) -ge 2 ] && printf "%s" "$err" | grep -q "到期续期" && ! printf "%s" "$err" | grep -q "飞书事件"'
+
+bash "$W" h local_h 2> "$TMP/a.err" & A=$!
+waitfor '[ "$(cat "$TMP/run/inbox.pid" 2>/dev/null)" = "$A" ]'
+check "等待进程登记为总控的事件读取" 'listener_alive inbox && hub_reader_ok'
+bash "$W" h local_h 2> "$TMP/b.err" & B=$!
+waitfor '! kill -0 "$A" 2>/dev/null'; wait "$A"; ra=$?
+check "新的等待进程顶替旧的，旧的不唤醒总控" '[ "$ra" != 2 ] && [ "$(cat "$TMP/run/inbox.pid")" = "$B" ] && ! grep -q "飞书事件" "$TMP/a.err"'
+echo '飞书消息（用户，text）: 顶替后来的' >> "$Q"
+wait "$B"; rb=$?
+check "顶替后的那个收到事件并唤醒总控" '[ "$rb" = 2 ] && grep -q "顶替后来的" "$TMP/b.err"'
+
+sleep 300 & SP=$!
+LARKSPUR_WAIT_PARENT=$SP bash "$W" h local_h 2>/dev/null & C=$!
+waitfor '[ "$(cat "$TMP/run/inbox.pid" 2>/dev/null)" = "$C" ]'
+kill "$SP"; wait "$C"; rc=$?
+echo '飞书消息（用户，text）: Claude 不在时来的' >> "$Q"; sleep 1.2
+check "Claude 进程没了：安静退出，事件留在队列里" '[ $rc = 0 ] && grep -q "Claude 不在时来的" "$Q" && [ ! -f "$TMP/run/inbox.pid" ]'
+: > "$Q"
+
+bash "$W" h local_h 2>/dev/null & D=$!
+waitfor '[ "$(cat "$TMP/run/inbox.pid" 2>/dev/null)" = "$D" ]'
+jq '.active=false' "$TMP/sessions/h.json" > "$TMP/x" && mv "$TMP/x" "$TMP/sessions/h.json"
+waitfor '! kill -0 "$D" 2>/dev/null'; wait "$D"; rd=$?
+check "总控关闭后等待进程自己退出" '[ $rd = 0 ]'
+jq '.active=true' "$TMP/sessions/h.json" > "$TMP/x" && mv "$TMP/x" "$TMP/sessions/h.json"
+
+jq '.session_id="h2"' "$TMP/sessions/h.json" > "$TMP/sessions/h2.json" && rm "$TMP/sessions/h.json"
+echo '飞书消息（用户，text）: 换了 ID' >> "$Q"
+err=$(timeout 10 bash "$W" h local_h 2>&1 >/dev/null); r=$?
+check "总控的会话 ID 变了，按桌面端会话 ID 仍认得" '[ $r = 2 ] && printf "%s" "$err" | grep -q "换了 ID"'
+mv "$TMP/sessions/h2.json" "$TMP/sessions/h.json"; jq '.session_id="h"' "$TMP/sessions/h.json" > "$TMP/x" && mv "$TMP/x" "$TMP/sessions/h.json"
+
+dead=$(bash -c 'echo $$'); echo '飞书消息（用户，text）: 被杀前取走的' > "$TMP/run/hub-taken.$dead"
+err=$(timeout 10 bash "$W" h local_h 2>&1 >/dev/null); r=$?
+check "旧等待进程取走后没交出就被杀：下一个补交，不丢" '[ $r = 2 ] && printf "%s" "$err" | grep -q "被杀前取走的" && [ ! -f "$TMP/run/hub-taken.$dead" ]'
+
+# hub-wait.sh 钩子
+rm -f "$TMP/run/inbox.handoff"
+timeout 5 bash "$TMP/hooks/hub-wait.sh" <<< '{"session_id":"g"}' 2>/dev/null; r=$?
+check "Stop 钩子：普通会话直接退出" '[ $r = 0 ] && [ ! -f "$TMP/run/inbox.pid" ]'
+echo '飞书消息（用户，text）: 钩子交的' >> "$Q"
+err=$(timeout 10 bash "$TMP/hooks/hub-wait.sh" <<< '{"session_id":"h"}' 2>&1 >/dev/null); r=$?
+check "Stop 钩子：总控会话等到事件后唤醒它" '[ $r = 2 ] && printf "%s" "$err" | grep -q "钩子交的"'
+echo '飞书消息（用户，text）: 新 ID' >> "$Q"
+err=$(CLAUDE_CODE_HOST_SESSION_ID=local_h timeout 10 bash "$TMP/hooks/hub-wait.sh" <<< '{"session_id":"brandnew"}' 2>&1 >/dev/null); r=$?
+check "Stop 钩子：总控换了会话 ID 也认得" '[ $r = 2 ] && printf "%s" "$err" | grep -q "新 ID"'
+
+# 普通会话的 Stop 钩子：总控正在处理（刚交出事件）时不误报
+bash -c 'exec -a larkspurd-fake sleep 300' & DPID=$!; echo "{\"pid\":$DPID,\"port\":1}" > "$TMP/run/daemon.json"
+out=$(printf '{"session_id":"g","stop_hook_active":false}' | bash "$TMP/hooks/ensure-listener.sh")
+check "总控刚被唤醒、正在处理时，普通会话不提醒总控" '[ -z "$out" ] && [ ! -f "$TMP/run/hub-nag" ]'
+out=$(printf '{"session_id":"h","stop_hook_active":false}' | bash "$TMP/hooks/ensure-listener.sh")
+check "总控自己的同步 Stop 钩子不再拦下（接收交给 hub-wait.sh）" '[ -z "$out" ]'
+kill "$DPID" 2>/dev/null
+
+out=$(bash "$TMP/listen-inbox.sh"); r=$?
+check "旧的 listen-inbox.sh 只说明已改为按需唤醒，不登记、不读队列" '[ $r = 0 ] && printf "%s" "$out" | grep -q "按需唤醒" && [ ! -f "$TMP/run/inbox.pid" ]'
+exit $fail

@@ -54,7 +54,7 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
     elif listener_alive "$hc.msg"; then up="运行中（已运行 $(( (now - started) / 60 )) 分钟）"
     else up="运行中，飞书监听正在重连"; fi
   else up="<font color=\"red\">没在运行</font>（在电脑桌面点「Larkspur」打开）"; fi
-  listener_alive inbox && reader=true
+  hub_reader_ok && reader=true
   local dstate gatelast; dstate=$(desktop_state); gatelast=$(desktop_gate_last)
   pending=$(grep -c '' "$RUN_DIR/hub-queue" 2>/dev/null); pending=${pending:-0}
 
@@ -81,7 +81,7 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
           | jq -Rsc 'split("\n") | map(select(length>0) | split(" ") | {(.[0]): (.[1]|tonumber)}) | add // {}')
 
   mem=0
-  for p in $(pgrep -f 'lark-cli event|/listen(-cards|-menu|-inbox)?\.sh|/netwatch\.sh|larkspurd' 2>/dev/null); do
+  for p in $(pgrep -f 'lark-cli event|/listen(-cards|-menu|-inbox|-wait)?\.sh|/netwatch\.sh|larkspurd' 2>/dev/null); do
     k=$(awk '/^Pss:/{print $2}' "/proc/$p/smaps_rollup" 2>/dev/null)
     [ -n "$k" ] || k=$(ps -p "$p" -o rss= 2>/dev/null | tr -d ' ')
     mem=$((mem + ${k:-0}))

@@ -101,11 +101,30 @@ claim_listener() {   # 顶替同名的旧实例（连同它的 lark-cli 子进�
   old=$(cat "$pf" 2>/dev/null)
   if [ -n "$old" ] && [ "$old" != "$$" ] && listener_pid_ok "$old"; then
     kill_tree "$old"; fs_log "listener-takeover $1 old=$old new=$$"
+    # 等旧实例真正退出再登记：它退出时会删自己的登记，晚了会把新登记一起删掉
+    local n=0; while kill -0 "$old" 2>/dev/null && [ "$n" -lt 30 ]; do sleep 0.1; n=$((n+1)); done
   fi
   echo "$$" > "$pf"
   trap "release_listener '$1'" EXIT
 }
 release_listener() { [ "$(cat "$RUN_DIR/$1.pid" 2>/dev/null)" = "$$" ] && rm -f "$RUN_DIR/$1.pid"; }
+# 总控是否在接收事件：后台等待进程（listen-wait.sh）在跑，或者它刚把事件交给总控、总控正在处理
+# （处理期间没有等待进程，回合结束时 Stop 钩子再起一个；交出去 10 分钟还没回来才算停了）
+hub_reader_ok() {
+  listener_alive inbox && return 0
+  local t; t=$(cat "$RUN_DIR/inbox.handoff" 2>/dev/null) || return 1
+  [ -n "$t" ] && [ $(( $(date +%s) - t )) -lt "${LARKSPUR_HANDOFF_GRACE:-600}" ]
+}
+claude_ancestor() {   # 运行本脚本的 Claude Code 进程（钩子的祖先），找不到时输出父进程
+  local p="$PPID" n=0 a0 a1
+  while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$n" -lt 30 ]; do
+    { IFS= read -r -d '' a0; IFS= read -r -d '' a1; } < "/proc/$p/cmdline" 2>/dev/null
+    case "${a0##*/} ${a1:-}" in "claude "*|node*claude-code*) echo "$p"; return ;; esac
+    a0=""; a1=""
+    p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null); n=$((n+1))
+  done
+  echo "$PPID"
+}
 # 给 lark-cli event consume 占住 stdin：它读到 EOF 约 2 秒内退出。hold_stdin <本脚本 pid> <秒数> [其他 pid…]
 # 在这些进程任何一个退出、或到了秒数时结束，lark-cli 随之退出（卡片、菜单监听还要看着总控的 listen.sh）。所以 consume 不能带 --timeout：带了 --timeout
 # lark-cli 就不理会 stdin 的 EOF，监听脚本被杀（桌面端重启）后它会成为孤儿，继续占着事件直到到时。
