@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Larkspur 控制台</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --text: #1d2129; --muted: #6b7280; --line: #e5e7eb;
+  --accent: #4f46e5; --accent-soft: #eef2ff;
+  --ok: #15803d; --ok-soft: #dcfce7; --warn: #b45309; --warn-soft: #fef3c7;
+  --bad: #b91c1c; --bad-soft: #fee2e2; --neutral-soft: #f3f4f6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111318; --card: #1a1d24; --text: #e5e7eb; --muted: #9ca3af; --line: #2b303b;
+    --accent: #818cf8; --accent-soft: #23264a;
+    --ok: #4ade80; --ok-soft: #12301f; --warn: #fbbf24; --warn-soft: #3a2c0c;
+    --bad: #f87171; --bad-soft: #3b1515; --neutral-soft: #262a33;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; }
+header { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: 1px solid var(--line); }
+.bar { max-width: 1160px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: 18px; letter-spacing: .3px; }
+.brand small { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 6px; }
+.spacer { flex: 1; }
+main { max-width: 1160px; margin: 0 auto; padding: 16px; display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; min-width: 0; }
+.card.wide { grid-column: 1 / -1; }
+.card h2 { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .5px;
+  display: flex; align-items: center; gap: 8px; }
+.card h2 .spacer { flex: 1; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 0;
+  border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; }
+.row .k { color: var(--muted); white-space: nowrap; }
+.row .v { text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.row.tall .k { white-space: normal; flex: 1; min-width: 0; color: var(--text); }
+.row.tall .v { flex: none; }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.tag.ok { background: var(--ok-soft); color: var(--ok); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+.tag.bad { background: var(--bad-soft); color: var(--bad); }
+.tag.neutral { background: var(--neutral-soft); color: var(--muted); }
+.ips { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.ip { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.ip .label { font-size: 12px; color: var(--muted); letter-spacing: .4px; }
+.ip .addr { font-size: 20px; font-weight: 700; margin: 2px 0; font-variant-numeric: tabular-nums; }
+.ip .where { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.score { display: flex; align-items: baseline; gap: 10px; margin: 4px 0 8px; }
+.score b { font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+.meter { height: 8px; border-radius: 4px; background: linear-gradient(90deg, #ef4444, #eab308 40%, #84cc16 65%, #22c55e); position: relative; margin: 6px 0 2px; }
+.meter i { position: absolute; top: -4px; width: 4px; height: 16px; border-radius: 2px; background: var(--text); transform: translateX(-2px); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 24px; }
+button, select, input { font: inherit; color: inherit; }
+button { border: 1px solid var(--line); background: var(--card); border-radius: 7px; padding: 5px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: .55; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { border-color: var(--bad); color: var(--bad); }
+button.danger.solid { background: var(--bad); color: #fff; }
+select, input[type=text] { border: 1px solid var(--line); background: var(--card); border-radius: 7px; padding: 4px 8px; min-width: 0; }
+input[type=text] { width: 160px; }
+.switch { position: relative; display: inline-block; vertical-align: middle; width: 40px; height: 22px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 22px; background: var(--line); transition: .15s; cursor: pointer; }
+.switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: .15s; }
+.switch input:checked + span { background: var(--ok); }
+.switch input:checked + span::before { transform: translateX(18px); }
+.desc { font-size: 12px; color: var(--muted); }
+.sess { padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
+.sess:last-child { border-bottom: 0; }
+.sess .info { flex: 1; min-width: 0; }
+.sess .name { font-weight: 600; }
+.sess .path { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.events { font-size: 13px; font-variant-numeric: tabular-nums; }
+.events div { padding: 3px 0; display: flex; gap: 10px; }
+.events time { color: var(--muted); }
+.notice { max-width: 1160px; margin: 12px auto 0; padding: 0 16px; }
+.notice div { border-radius: 8px; padding: 9px 12px; font-size: 13px; }
+.notice .warn { background: var(--warn-soft); color: var(--warn); }
+.notice .bad { background: var(--bad-soft); color: var(--bad); }
+code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px; background: var(--neutral-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+#toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg);
+  padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); }
+#toast.show { opacity: .94; }
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); max-width: 420px; padding: 20px 22px; }
+dialog::backdrop { background: rgba(0,0,0,.35); }
+dialog h3 { margin: 0 0 8px; font-size: 16px; }
+dialog p { margin: 0 0 16px; color: var(--muted); }
+dialog .btns { display: flex; justify-content: flex-end; gap: 8px; }
+.stopped { max-width: 520px; margin: 18vh auto 0; text-align: center; padding: 0 16px; }
+.stopped h1 { font-size: 22px; margin: 0 0 8px; }
+.stopped p { color: var(--muted); }
+.skeleton { color: var(--muted); }
+@media (max-width: 420px) { main { grid-template-columns: 1fr; } input[type=text] { width: 120px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand">Larkspur<small>飞书 × Claude Code</small></div>
+    <span id="svc" class="tag neutral">连接中…</span>
+    <span class="spacer"></span>
+    <span class="desc" id="updated"></span>
+    <button class="danger" id="stopBtn">关闭 Larkspur</button>
+  </div>
+</header>
+<div class="notice" id="notices"></div>
+<main id="main">
+  <section class="card"><h2>状态</h2><div id="status" class="skeleton">加载中…</div></section>
+  <section class="card"><h2>IP 闸门</h2><div id="guard" class="skeleton">加载中…</div></section>
+  <section class="card wide"><h2>网络检测<span class="spacer"></span><span class="desc" id="netTime"></span><button id="netBtn" class="primary">重新检测</button></h2><div id="net" class="skeleton">加载中…</div></section>
+  <section class="card"><h2>同步中的会话</h2><div id="sessions" class="skeleton">加载中…</div></section>
+  <section class="card"><h2>最近事件</h2><div id="events" class="events skeleton">加载中…</div></section>
+  <section class="card"><h2>功能选项</h2><div id="options" class="skeleton">加载中…</div></section>
+</main>
+<div id="toast"></div>
+<dialog id="dlg"><h3 id="dlgTitle"></h3><p id="dlgText"></p>
+  <div class="btns"><button id="dlgNo">取消</button><button id="dlgYes" class="danger solid">确定</button></div></dialog>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const tag = (text, kind) => `<span class="tag ${kind}">${esc(text)}</span>`;
+const row = (k, v) => `<div class="row"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
+const flag = (cc) => /^[A-Za-z]{2}$/.test(cc || "") ? String.fromCodePoint(...[...cc.toUpperCase()].map(c => 127397 + c.charCodeAt(0))) + " " : "";
+let S = null, stopped = false, editing = false;
+
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2600); }
+function confirmBox(title, text, yes = "确定") {
+  return new Promise((res) => {
+    const d = $("dlg"); $("dlgTitle").textContent = title; $("dlgText").textContent = text; $("dlgYes").textContent = yes;
+    const done = (v) => { d.close(); $("dlgYes").onclick = $("dlgNo").onclick = null; res(v); };
+    $("dlgYes").onclick = () => done(true); $("dlgNo").onclick = () => done(false); d.oncancel = () => done(false);
+    d.showModal();
+  });
+}
+async function post(path, body = {}) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Larkspur": "1" }, body: JSON.stringify(body) });
+  let j = {}; try { j = await r.json(); } catch (e) {}
+  if (!r.ok || j.ok === false) throw new Error(j.error || ("请求失败（" + r.status + "）"));
+  return j;
+}
+
+function ago(sec) { if (sec < 60) return "刚刚"; if (sec < 3600) return Math.floor(sec / 60) + " 分钟前"; if (sec < 86400) return Math.floor(sec / 3600) + " 小时前"; return Math.floor(sec / 86400) + " 天前"; }
+function dur(sec) { const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return h ? `${h} 小时 ${m} 分钟` : `${m} 分钟`; }
+
+function renderStatus(d) {
+  const D = d.daemon || {};
+  $("svc").outerHTML = `<span id="svc" class="tag ok">运行中 · ${esc("localhost:" + D.port)}</span>`;
+  const t = d.today || {};
+  let h = "";
+  h += row("Larkspur 服务", `${tag("运行中", "ok")} <span class="desc">已运行 ${dur(D.uptime || 0)}</span>`);
+  h += row("飞书监听", !D.hub_chat ? tag("没有总控，不收消息", "warn") : D.listener ? tag("在线", "ok") : tag("正在重连", "warn"));
+  h += row("总控会话", (D.hub_reader ? tag("在读取", "ok") : tag("没在读取", "bad")) +
+           (D.queue_pending > 0 ? ` <span class="desc">${D.queue_pending} 条事件排队中</span>` : ""));
+  const dsk = d.desktop || "stopped", gl = d.gatelast || {};
+  h += row("Claude 桌面端", dsk === "running" ? tag("运行中", "ok")
+          : dsk === "starting" ? tag("正在启动（检查出口 IP）", "warn")
+          : `${tag("没在运行", "neutral")} <button class="primary" id="deskBtn">启动桌面端</button>`);
+  if (dsk !== "running" && gl.r === "refused")
+    h += `<div class="desc" style="color:var(--bad);padding:4px 0">上次启动被闸门拦下（${esc((gl.t || "").slice(11, 16))}）：出口 IP 不符</div>`;
+  h += row("今天", `收到 ${t.inbound || 0} · 转发 ${t.route || 0} · 发回 ${t.outbound || 0}` +
+           ((t["outbound-failed"] || 0) > 0 ? ` · <span style="color:var(--bad)">失败 ${t["outbound-failed"]}</span>` : ""));
+  h += row("常驻内存", esc(d.mem) + " MB");
+  h += row("网络检测", d.netint > 0 ? `每 ${esc(d.netint)} 秒自动检测` : tag("自动检测已关闭", "neutral"));
+  $("status").className = ""; $("status").innerHTML = h;
+  if ($("deskBtn")) $("deskBtn").onclick = async () => {
+    if (!await confirmBox("启动 Claude 桌面端？", "会先检查三个出口 IP，都相符才启动；不符就不启动、不联网。", "启动")) return;
+    $("deskBtn").disabled = true;
+    try { const j = await post("/api/desktop/start"); toast(j.message || "正在启动"); } catch (e) { toast(e.message); }
+    refresh();
+  };
+
+  const n = [];
+  if (D.port_note) n.push(`<div class="warn">${esc(D.port_note)}。之前收藏的地址已失效，以后从桌面的「Larkspur」图标打开即可。</div>`);
+  if (D.hub_chat && !D.hub_reader) n.push(`<div class="bad">总控会话没在读取飞书事件，消息会排在队列里。打开 Claude 桌面端里的总控会话，随便发一句话，它就会恢复。</div>`);
+  $("notices").innerHTML = n.join("");
+}
+
+function renderNet(d) {
+  const n = d.net || {}, r = n.risk || {}, g = d.guardcfg || {};
+  if (!n.at) { $("net").className = "skeleton"; $("net").textContent = "还没有检测过，点「重新检测」。"; $("netTime").textContent = ""; return; }
+  const ipCard = (label, x, mark) => {
+    const ok = g.expected && x && x.ip ? (x.ip === g.expected ? tag("相符", "ok") : tag("不符", "bad")) : "";
+    return `<div class="ip"><div class="label">${esc(label)} ${mark ? ok : ""}</div>
+      <div class="addr">${x && x.ip ? flag(x.cc) + esc(x.ip) : '<span style="color:var(--bad)">获取失败</span>'}</div>
+      <div class="where" title="${esc(x && x.where)}">${esc((x && x.where) || "")}</div></div>`;
+  };
+  const score = n.restricted ? 0 : r.score;
+  const lv = n.restricted ? ["不可访问", "bad"] : score == null ? ["无数据", "neutral"] : score >= 95 ? ["极度纯净", "ok"] : score >= 80 ? ["纯净", "ok"] : score >= 50 ? ["良好", "ok"] : score >= 25 ? ["中性", "warn"] : ["可疑", "bad"];
+  const yn = (v, yes, no) => v === true ? tag(yes, "bad") : v === false ? tag(no, "ok") : tag("未知", "neutral");
+  const lat = (n.latency || []).map(l => row(l.name, n.restricted || l.ms < 0 ? tag("不可访问", "bad")
+      : (l.ms < 250 ? tag("正常", "ok") : l.ms < 500 ? tag("良好", "ok") : tag("较慢", "warn")) + ` <span class="desc">${l.ms}ms</span>`)).join("");
+  const stMap = { none: ["全部服务正常", "ok"], minor: ["轻微故障", "warn"], major: ["重大故障", "bad"], critical: ["严重故障", "bad"], maintenance: ["维护中", "warn"] };
+  const st = n.status ? (stMap[n.status.indicator] || ["服务异常", "warn"]) : ["未知", "neutral"];
+  const dns = (n.dns && n.dns.servers) || [];
+  const dnsShow = dns.find(x => x.cc === "cn") || dns[0];
+  const ctype = { hosting: "Hosting", isp: "ISP", business: "Business", education: "Education" }[r.company_type] || r.company_type || "";
+
+  let h = `<div class="ips">${ipCard("中国出口 IPv4", n.cn, true)}${ipCard("Cloudflare 出口 IP", n.cloudflare, true)}${ipCard("Claude AI 出口 IP", n.claude, true)}</div>`;
+  h += `<div class="cols" style="margin-top:14px"><div>
+      <div class="desc">Claude AI 信任评分</div>
+      <div class="score"><b style="color:var(--${lv[1] === "ok" ? "ok" : lv[1] === "warn" ? "warn" : lv[1] === "bad" ? "bad" : "muted"})">${score == null ? "—" : esc(score)}</b>${tag(lv[0], lv[1])}</div>
+      <div class="meter">${score == null ? "" : `<i style="left:${Math.min(Math.max(score, 0), 100)}%"></i>`}</div>
+      <div class="desc" style="display:flex;justify-content:space-between"><span>0 高危</span><span>100 可信</span></div>
+      ${n.restricted ? `<div style="color:var(--bad);margin-top:6px">出口 IP 位于${esc(n.restricted)}，Claude 会严格风控，不建议登录</div>` : ""}
+      ${row("Claude 支持地区", n.restricted ? tag("不支持", "bad") : n.claude && n.claude.cc ? tag("正常", "ok") : tag("未知", "neutral"))}
+    </div><div>
+      ${row("IP 属性", (r.residential === true ? tag("家庭住宅 IP", "ok") : r.residential === false ? tag("机房 IP", "warn") : tag("未知", "neutral")) + (ctype ? ` <span class="desc">(${esc(ctype)})</span>` : ""))}
+      ${row("ASN", r.asn ? "AS" + esc(r.asn) : "未知")}
+      ${row("运营商", esc(r.org || "未知"))}
+      ${row("VPN", yn(r.vpn, "VPN", "未检测到"))}${row("代理 (Proxy)", yn(r.proxy, "代理", "未检测到"))}${row("Tor", yn(r.tor, "Tor", "未检测到"))}
+      ${row("机器人 (Crawler)", yn(r.crawler, "是", "否"))}${row("滥用记录", yn(r.abuser, "有记录", "无记录"))}
+    </div><div>
+      ${lat}
+      ${row("Claude 服务状态", tag(st[0], st[1]) + (n.status && n.status.down && n.status.down.length ? ` <span class="desc">${esc(n.status.down.join("、"))}</span>` : ""))}
+      ${row("DNS 泄露", dns.length === 0 ? tag("DNS 加密或未暴露出口", "ok") : n.dns.leak ? tag("可能泄露", "warn") : tag("未检测到泄露", "ok"))}
+      ${dnsShow ? row("DNS 出口", flag(dnsShow.cc) + esc(dnsShow.ip) + (dnsShow.isp ? ` <span class="desc">${esc(dnsShow.isp)}</span>` : "")) : ""}
+    </div></div>
+    <div class="desc" style="margin-top:8px">数据来自 ip.net.coffee · WebRTC 只存在于浏览器，不检测</div>`;
+  $("net").className = ""; $("net").innerHTML = h;
+  $("netTime").textContent = "检测于 " + (n.at_text || "") + (d.now ? "（" + ago(d.now - n.at) + "）" : "");
+}
+
+function renderGuard(d) {
+  if (editing) return;
+  const g = d.guardcfg || {}, n = d.net || {};
+  const ips = [n.cn && n.cn.ip, n.cloudflare && n.cloudflare.ip, n.claude && n.claude.ip].map(x => x || "");
+  const verdict = !g.expected ? tag("没有设置期望 IP，闸门和守卫都不起作用", "warn")
+    : ips.some(x => x && x !== g.expected) ? tag("有出口不符", "bad")
+    : ips.every(x => x === g.expected) ? tag("三个出口都相符", "ok") : tag("有出口没查到", "neutral");
+  const sw = (key, on) => `<label class="switch"><input type="checkbox" data-key="${key}" ${on ? "checked" : ""}><span></span></label>`;
+  let h = row("期望 IP", `<input type="text" id="expip" value="${esc(g.expected)}" placeholder="例如 203.0.113.7" inputmode="decimal"> <button id="expSave">保存</button>`);
+  h += row("当前判断", verdict);
+  h += `<div class="row tall"><span class="k">启动闸门<div class="desc">桌面端启动前检查三个出口 IP，不符就不启动、不联网${g.gate_installed ? "" : "（闸门程序没装，重新运行 install.sh）"}</div></span><span class="v">${sw("gate", g.gate !== "off")}</span></div>`;
+  h += `<div class="row tall"><span class="k">运行中守卫<div class="desc">每次网络检测后检查，不符时运行 <code>${esc((g.cmd || "（没有配置，只提醒）").split("/").pop())}</code></div></span><span class="v">${sw("guard", g.guard !== "off")}</span></div>`;
+  $("guard").className = ""; $("guard").innerHTML = h;
+  $("expip").onfocus = () => { editing = true; }; $("expip").onblur = () => setTimeout(() => { editing = false; }, 300);
+  $("expSave").onclick = async () => {
+    const v = $("expip").value.trim(); editing = false;
+    if (g.guard !== "off" && ips.some(x => x && x !== v) && !await confirmBox("确定修改期望 IP？", `当前出口和 ${v} 不一致，运行中守卫开着：保存后一分钟内就会结束所有相关进程。`, "确定保存")) return;
+    try { await post("/api/config", { key: "expip", value: v }); toast("期望 IP 已保存"); refresh(); } catch (e) { toast(e.message); }
+  };
+  $("guard").querySelectorAll("input[type=checkbox]").forEach(cb => cb.onchange = async () => {
+    const on = cb.checked, key = cb.dataset.key;
+    if (key === "guard" && on && ips.some(x => x && x !== g.expected) &&
+        !await confirmBox("确定打开运行中守卫？", "现在有出口 IP 不符，打开后一分钟内就会结束所有相关进程。", "确定打开")) { cb.checked = false; return; }
+    try { await post("/api/config", { key, value: on ? "on" : "off" }); toast((key === "gate" ? "启动闸门" : "运行中守卫") + (on ? "已打开" : "已关闭")); refresh(); }
+    catch (e) { cb.checked = !on; toast(e.message); }
+  });
+}
+
+function renderSessions(d) {
+  const act = (d.sessions || []).filter(s => s.active).sort((a, b) => (b.hub ? 1 : 0) - (a.hub ? 1 : 0));
+  if (!act.length) { $("sessions").className = "skeleton"; $("sessions").textContent = "没有同步中的会话"; return; }
+  $("sessions").className = "";
+  $("sessions").innerHTML = act.map(s => `<div class="sess"><div class="info">
+      <div class="name">${esc(s.name)} ${s.hub ? tag("总控", "neutral") : ""}</div>
+      <div class="path">${s.group ? "群：" + esc(s.group) + "<br>" : ""}${esc(s.cwd)}${s.last ? " · 最后活动 " + esc(s.last) : ""}</div></div>
+      ${s.hub ? "" : `<button data-off="${esc(s.sid)}" data-name="${esc(s.name)}">关闭同步</button>`}</div>`).join("");
+  $("sessions").querySelectorAll("button[data-off]").forEach(b => b.onclick = async () => {
+    if (!await confirmBox("关闭这个会话的飞书同步？", `「${b.dataset.name}」的群会保留，之后在会话里 /feishu on 可以重新开启。`, "关闭同步")) return;
+    b.disabled = true;
+    try { await post("/api/session/off", { sid: b.dataset.off }); toast("已关闭同步"); refresh(); } catch (e) { b.disabled = false; toast(e.message); }
+  });
+}
+
+const LABELS = { inbound: "收到", route: "转发", outbound: "发回飞书", "outbound-failed": "发回失败", backfill: "补发",
+  "listener-takeover": "监听接替", "listener-missing": "监听停止", "hub-listener-missing": "总控监听停止", spawn: "新建会话",
+  on: "开启同步", off: "关闭同步", "hub-on": "开启总控", "route-skip": "未转发", "daemon-start": "启动 Larkspur", "daemon-stop": "关闭 Larkspur" };
+function renderEvents(d) {
+  const names = {};
+  (d.sessions || []).forEach(s => { names[s.chat] = names[s.sid] = names[s.desk] = s.name; });
+  const ev = d.events || [];
+  if (!ev.length) { $("events").className = "events skeleton"; $("events").textContent = "暂无"; return; }
+  $("events").className = "events";
+  $("events").innerHTML = ev.map(l => {
+    const w = l.split(" "), t = w[1];
+    let nm = "";
+    for (const x of w.slice(2)) { const m = x.match(/^(chat|to|desktop|sid)=(.+)$/); if (m && names[m[2]]) { nm = names[m[2]]; break; } }
+    return `<div><time>${esc(w[0])}</time><span>${esc(LABELS[t] || t)}</span><span class="desc">${esc(nm)}</span></div>`;
+  }).join("");
+}
+
+function renderOptions(d) {
+  if (editing) return;
+  const o = d.opt || {};
+  const sel = (key, cur, opts) => `<select data-key="${key}">${opts.map(([t, v]) => `<option value="${esc(v)}" ${String(cur) === v ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`;
+  const txt = (key, cur) => `<input type="text" data-key="${key}" value="${esc(cur)}">`;
+  let h = row("已读回执表情", sel("ack", o.ack || "off", [["了解", "Get"], ["OK", "OK"], ["赞", "THUMBSUP"], ["完成", "DONE"], ["不加", "off"]]));
+  h += row("图片等文字", sel("wait", o.wait, [["不等", "0"], ["3 秒", "3"], ["5 秒", "5"], ["10 秒", "10"]]));
+  h += row("断线补发", sel("backfill", o.backfill, [["不补发", "0"], ["1 小时", "1"], ["6 小时", "6"], ["12 小时", "12"], ["24 小时", "24"]]));
+  h += row("新会话权限模式", sel("spawn", o.spawn || "none", [["不切换", "none"], ["接受编辑", "acceptEdits"], ["跳过权限确认", "bypassPermissions"]]));
+  h += row("异常提醒", sel("alerts", o.alerts, [["开", "on"], ["关", "off"]]));
+  h += row("群名前缀", txt("prefix", o.prefix));
+  h += row("项目根目录", txt("root", o.root));
+  $("options").className = ""; $("options").innerHTML = h + `<div class="desc" style="margin-top:6px">改完立即生效；文字项按回车保存。</div>`;
+  $("options").querySelectorAll("select,input").forEach(el => {
+    const save = async () => { editing = false;
+      try { await post("/api/config", { key: el.dataset.key, value: el.value }); toast("已保存"); } catch (e) { toast("没有保存：" + e.message); refresh(); } };
+    if (el.tagName === "SELECT") el.onchange = save;
+    else { el.onfocus = () => { editing = true; }; el.onblur = () => setTimeout(() => { editing = false; }, 300);
+           el.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); el.blur(); save(); } }; }
+  });
+}
+
+async function refresh() {
+  if (stopped) return;
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    if (!r.ok) throw new Error();
+    S = await r.json();
+    renderStatus(S); renderNet(S); renderGuard(S); renderSessions(S); renderEvents(S); renderOptions(S);
+    $("updated").textContent = "更新于 " + (S.time || "");   // 与飞书控制台一样按 LARKSPUR_DISPLAY_TZ 显示
+  } catch (e) {
+    $("svc").outerHTML = `<span id="svc" class="tag bad">连不上 Larkspur</span>`;
+  }
+}
+
+$("netBtn").onclick = async () => {
+  const b = $("netBtn"); b.disabled = true; b.textContent = "检测中…（约 10 秒）";
+  try { await post("/api/netcheck"); toast("检测完成"); } catch (e) { toast("检测失败：" + e.message); }
+  b.disabled = false; b.textContent = "重新检测"; refresh();
+};
+$("stopBtn").onclick = async () => {
+  if (!await confirmBox("关闭 Larkspur？", "飞书监听、每分钟网络检测和运行中 IP 守卫都会停止，飞书消息暂时收不到（之后打开会补发）。可以从电脑桌面的「Larkspur」图标重新打开。", "关闭")) return;
+  try { await post("/api/stop"); } catch (e) { toast(e.message); return; }
+  stopped = true;
+  document.body.innerHTML = `<div class="stopped"><h1>Larkspur 已关闭</h1><p>飞书监听、网络检测和运行中 IP 守卫都已停止。<br>从电脑桌面的「Larkspur」图标可以重新打开。</p></div>`;
+};
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

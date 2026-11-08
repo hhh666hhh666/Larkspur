@@ -34,6 +34,14 @@ gate="$HOME/.local/bin/claude-desktop"
 [ -f "$gate" ] && grep -q 'Claude 桌面端的启动闸门' "$gate" && rm -f "$gate" && say "已移除桌面端启动闸门 $gate"
 desk=$(xdg-user-dir DESKTOP 2>/dev/null || true)
 rm -f "$HOME/.local/bin/larkspur-ip-gate" "$HOME/.local/share/applications/larkspur-ip-gate.desktop" ${desk:+"$desk/IP闸门.desktop"}
+if command -v systemctl >/dev/null; then
+  systemctl --user stop larkspur.service 2>/dev/null || true
+  rm -f "$HOME/.config/systemd/user/larkspur.service"; systemctl --user daemon-reload 2>/dev/null || true
+fi
+[ -f "$DEST/run/daemon.json" ] && kill "$(jq -r '.pid // empty' "$DEST/run/daemon.json" 2>/dev/null)" 2>/dev/null || true
+rm -f "$DEST/larkspurd.py" "$DEST/larkspurctl.sh" "$DEST/listen-inbox.sh" "$HOME/.local/share/applications/larkspur.desktop" ${desk:+"$desk/Larkspur.desktop"}
+rm -rf "$DEST/web"
+say "已移除常驻服务"
 rm -rf "$DEST/hooks" "$DEST/run"
 say "已移除脚本"
 

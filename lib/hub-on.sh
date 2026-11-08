@@ -24,5 +24,7 @@ chat=$(printf '%s' "$out" | jq -r '.data.chat_id // empty' 2>/dev/null)
 jq -n --arg sid "$sid" --arg chat "$chat" --arg cwd "$PWD" --arg t "$(date -Iseconds)" --arg d "$desktop" \
    '{session_id:$sid, desktop_id:$d, chat_id:$chat, cwd:$cwd, active:true, role:"hub", enabled_at:$t, last_sent_hash:""}' > "$f"
 fs_log "hub-on sid=$sid chat=$chat"
+# 飞书监听由常驻服务负责：开总控就是要收消息，顺手把它打开（已在运行就跳过）
+"$LARKSPUR_HOME/larkspurctl.sh" start >/dev/null 2>&1 || echo "Larkspur 常驻服务没能启动，飞书消息暂时收不到：见 $LOG" >&2
 console_refresh
 echo "$chat"

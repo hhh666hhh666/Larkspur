@@ -29,6 +29,7 @@ EXPECTED_IP="${LARKSPUR_EXPECTED_IP:-}"                # 三个出口 IP 都应�
 IP_GUARD_CMD="${LARKSPUR_IP_GUARD_CMD:-}"              # 出口 IP 不符时运行的命令（stdin 会收到 "y"）
 IP_GUARD="${LARKSPUR_IP_GUARD:-on}"                    # 运行中的 IP 守卫开关（on/off）
 DESKTOP_GATE="${LARKSPUR_DESKTOP_GATE:-on}"            # 桌面端启动闸门开关（on/off）
+WEB_PORT="${LARKSPUR_WEB_PORT:-random}"                # 本地网页控制台端口（只监听 127.0.0.1）；random：首次随机挑一个高位端口并记下
 NET_REFRESH="${LARKSPUR_NET_REFRESH:-60}"              # 总控在跑时，每隔多少秒重新做一次网络检测并刷新控制台，0 关闭
 BACKFILL_MAX="${LARKSPUR_BACKFILL_MAX:-20}"           # 一次最多补发几条
 
@@ -157,6 +158,29 @@ routed_chats() {   # 所有活动的非总控会话的群
   local f; for f in "$STATE_DIR"/*.json; do [ -f "$f" ] || continue
     jq -r 'select(.active == true and .role != "hub") | .chat_id // empty' "$f" 2>/dev/null
   done | sort -u
+}
+
+# ---- 常驻服务 larkspurd ----
+daemon_alive() {   # 常驻服务是否在运行
+  local p; p=$(jq -r '.pid // empty' "$RUN_DIR/daemon.json" 2>/dev/null)
+  [ -n "$p" ] && tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'larkspurd'
+}
+
+# ---- Claude 桌面端 ----
+desktop_state() {   # running（在运行）| starting（启动闸门正在检查出口 IP）| stopped
+  local p a st=stopped
+  for p in $(pgrep -u "$(id -u)" -x "${LARKSPUR_DESKTOP_COMM:-claude-desktop}" 2>/dev/null); do   # 测试里换成假进程名
+    a=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)
+    case "$a" in
+      *--type=*) ;;                                   # Electron 的子进程
+      */bash\ *|bash\ *|*/sh\ *|sh\ *) st=starting ;;   # 启动闸门（脚本）
+      *) echo running; return ;;
+    esac
+  done
+  echo "$st"
+}
+desktop_gate_last() {   # 启动闸门最近一次的结果（日志原文，没有时为空）
+  grep -E ' desktop-gate (pass|refused|off)' "$LOG" 2>/dev/null | tail -n 1
 }
 
 # ---- 控制台与提醒 ----

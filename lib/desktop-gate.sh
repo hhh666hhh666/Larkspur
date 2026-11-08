@@ -5,7 +5,7 @@
 # 设了 LARKSPUR_EXPECTED_IP 时：先查三个出口 IP（国内网站、Cloudflare、Claude 看到的，见 exit-ips.sh），
 # 三个都查到且都等于它才启动真正的桌面端；有不符的、或有查不到的，就在 LARKSPUR_DESKTOP_GATE_WAIT 秒（默认 30）内每 3 秒重查（开机时代理可能还没起来），
 # 期满仍不通过就不启动——桌面端根本不会运行，也就不会联网。拒绝时弹出桌面通知，并尽量在飞书私聊里提醒。
-# LARKSPUR_DESKTOP_GATE=off 时不检查（桌面上的「IP 闸门」设置程序可以切换）。
+# LARKSPUR_DESKTOP_GATE=off 时不检查（本地网页控制台里可以切换）。
 # 桌面端已经在运行时（例如点 claude:// 链接），只是把参数交给它，直接放行；运行中的 IP 变化由 ipguard.sh 负责。
 set -u
 H="${LARKSPUR_HOME:-$HOME/.claude/larkspur}"
@@ -35,7 +35,7 @@ for p in $(pgrep -u "$(id -u)" -x claude-desktop 2>/dev/null); do
 done
 
 [ -n "$EXPECTED" ] || exec "$real" "$@"   # 没配置期望 IP：不设闸
-[ "$GATE" = off ] && { log "desktop-gate off"; exec "$real" "$@"; }   # 在「IP 闸门」设置程序里关掉了
+[ "$GATE" = off ] && { log "desktop-gate off"; exec "$real" "$@"; }   # 在本地网页控制台里关掉了
 
 case "$WAIT" in ''|*[!0-9]*) WAIT=30 ;; esac
 [ -x "$H/exit-ips.sh" ] || { echo "缺少 $H/exit-ips.sh，无法检测 IP，不启动" >&2; exit 1; }   # 设了期望 IP 就不放空闸

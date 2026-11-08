@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 用法：listen.sh <chat_id> [--hub]
-# 供 Claude Code 的 Monitor 使用：stdout 每行是一个事件（200ms 内的多行会合并为一条通知）。
+# 由常驻服务 larkspurd 运行：stdout 每行是一个事件，larkspurd 把它们追加到 run/hub-queue，
+# 总控会话用 Monitor 运行 listen-inbox.sh 读取。也可以直接放在 Monitor 里运行（旧用法）。
 #
 # 只有总控能监听（--hub，旧写法 --with-cards 等同）。普通会话不允许各自监听：
 # 不带 --hub 启动时输出一行「飞书监听状态: …」后直接退出，各会话的群消息一律由总控转发。
@@ -8,7 +9,7 @@
 #   1. 自己私聊里的消息照常输出；
 #   2. 后台跑 listen-cards.sh，卡片提交也从这里输出；
 #   3. 后台跑 listen-menu.sh，响应机器人菜单里的「控制台」按钮；私聊里发「控制台」「状态」「会话」「设置」「网络」
-#      也由脚本直接打开控制台卡片，不唤醒 Claude；后台跑 netwatch.sh，每分钟重做网络检测并刷新控制台；
+#      也由脚本直接打开控制台卡片，不唤醒 Claude；
 #   4. 其他开着同步的会话的群里，用户发的消息输出成一行「飞书转发: {"to","chat","group","message"}」，
 #      （另有 chat 字段）由总控用 send_message 投进对应会话，在桌面端显示为消息气泡。
 #
@@ -34,6 +35,12 @@ if [ -z "$hub" ]; then
   exit 0
 fi
 
+# 飞书监听已交给常驻服务时，别处（例如总控旧的 Monitor）再启动的监听不能顶替服务的那一个，否则两边会来回抢
+if [ -z "${LARKSPUR_DAEMON:-}" ] && daemon_alive; then
+  printf '飞书监听状态: 飞书监听已交给 Larkspur 常驻服务，本 Monitor 不再需要。请改用 Monitor 运行：command `%s`，description `飞书私聊（总控）`，timeout_ms `1800000`；以后到期续期时也用它，不要再运行 listen.sh。启动后不要输出任何文字。\n' "$LARKSPUR_HOME/listen-inbox.sh"
+  fs_log "listen-refused chat=$chat reason=daemon"
+  exit 0
+fi
 claim_listener "$chat.msg"
 # 不允许各会话自己监听：总控一启动就停掉还在跑的会话监听（旧版本留下的），它们的消息由总控转发
 for c in $(routed_chats); do
@@ -41,12 +48,11 @@ for c in $(routed_chats); do
   op=$(cat "$RUN_DIR/$c.msg.pid" 2>/dev/null)
   if listener_pid_ok "$op"; then kill_tree "$op"; rm -f "$RUN_DIR/$c.msg.pid"; fs_log "session-listener-stopped chat=$c pid=$op"; fi
 done
-cards_pid=""; menu_pid=""; net_pid=""
+cards_pid=""; menu_pid=""
 if [ -n "$hub" ]; then
   "$LARKSPUR_HOME/listen-cards.sh" "$chat" $$ & cards_pid=$!
   "$LARKSPUR_HOME/listen-menu.sh" $$ & menu_pid=$!
-  "$LARKSPUR_HOME/netwatch.sh" $$ </dev/null >/dev/null 2>&1 & net_pid=$!
-  trap 'release_listener "$chat.msg"; kill_tree "$cards_pid"; kill_tree "$menu_pid"; kill_tree "$net_pid"' EXIT
+  trap 'release_listener "$chat.msg"; kill_tree "$cards_pid"; kill_tree "$menu_pid"' EXIT
 fi
 cfg_m=$(file_mtime "$LARKSPUR_HOME/config.sh")
 reload_cfg() {   # 控制台改了 config.sh 时，不用重启监听就生效

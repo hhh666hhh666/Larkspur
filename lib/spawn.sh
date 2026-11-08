@@ -38,9 +38,13 @@ sid=$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)
 # 2. 建专属群并写同步记录
 chat=$("$LARKSPUR_HOME/on.sh" "$sid" "$dir" "$title" "local_$sid" 2>/dev/null) || fail "建群失败（会话 $sid 已创建）"
 
-# 3. 导入桌面端
+# 3. 导入桌面端。claude:// 链接在桌面端没运行时会把它启动起来，而桌面端只能手动启动，所以只在它运行时导入
 if command -v xdg-open >/dev/null; then opener=xdg-open; elif command -v open >/dev/null; then opener=open; else opener=""; fi
-[ -n "$opener" ] && "$opener" "claude://resume?session=$sid" >/dev/null 2>&1 &
+if [ "$(desktop_state)" = running ]; then
+  [ -n "$opener" ] && "$opener" "claude://resume?session=$sid" >/dev/null 2>&1 &
+else
+  fs_log "spawn-import-skipped sid=$sid reason=desktop-not-running"
+fi
 
 # 4. 要不要让总控切换权限模式：settings.json 的默认模式已经是 auto（导入后直接生效、不弹确认卡）
 #    或已经等于目标模式时，就不切换。例外：默认模式设成 bypassPermissions 时，导入后只会是 acceptEdits，仍要切换。

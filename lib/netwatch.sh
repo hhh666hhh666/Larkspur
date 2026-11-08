@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 用法：netwatch.sh <父进程 pid>
-# 总控用：由 listen.sh --hub 在后台拉起，父进程退出就跟着退出。
+# 由常驻服务 larkspurd 拉起（参数是它的 pid），父进程退出就跟着退出。
 # 每隔 LARKSPUR_NET_REFRESH 秒（默认 60，0 关闭）重新做一次网络检测，并原地刷新控制台卡片。
 # 控制台卡片还没发过时只检测、不发卡片。每次刷新后接着跑 IP 守卫（ipguard.sh --cached）。间隔从上一轮开始时算，检测和刷新的耗时不额外累加。
 set -u

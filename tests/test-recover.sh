@@ -27,7 +27,8 @@ waitfor "$TMP/a.out" "实时消息"
 check "首次启动不补发" '! grep -q "补发" "$TMP/a.out"'
 check "连上时不输出就绪" '! grep -q "就绪" "$TMP/a.out"'
 check "监听登记了 pid" '[ "$(cat "$TMP/run/oc_t.msg.pid")" = "$A" ]'
-check "监听活着时钩子放行" '[ -z "$(hook)" ]'
+LARKSPUR_INBOX_SECONDS=300 bash "$TMP/listen-inbox.sh" > "$TMP/inbox.out" 2>&1 & IN=$!; sleep 0.5
+check "总控的事件读取活着时钩子放行" '[ -z "$(hook)" ]'
 a_kids=$(tree "$A" | tail -n +2 | tr '\n' ' ')
 
 bash "$TMP/listen.sh" oc_t --hub > "$TMP/b.out" 2>&1 & B=$!
@@ -39,9 +40,9 @@ check "补发了中断时的文字和图片" 'grep -q "中断时发的文字" "$
 check "机器人的消息不补发" '! grep -q "机器人回复" "$TMP/b.out"'
 check "已处理的实时消息不重复" '! grep -q "实时消息" "$TMP/b.out"'
 
-kill_tree "$B"; sleep 0.3
+kill_tree "$B"; kill_tree "$IN"; sleep 0.3
 out=$(hook)
-check "总控监听停了时钩子拦下并给出 --hub 重启命令" 'printf "%s" "$out" | jq -e ".decision==\"block\" and (.reason|contains(\"listen.sh oc_t --hub\"))" >/dev/null'
+check "总控的事件读取停了时钩子拦下并给出 listen-inbox.sh 重启命令" 'printf "%s" "$out" | jq -e ".decision==\"block\" and (.reason|contains(\"listen-inbox.sh\"))" >/dev/null'
 check "第二次（stop_hook_active）放行" '[ -z "$(hook true)" ]'
 # 没有总控时：普通会话不被要求自己监听，只在群里提醒开总控
 jq '.role=""' "$TMP/sessions/s1.json" > "$TMP/x" && mv "$TMP/x" "$TMP/sessions/s1.json"
@@ -125,7 +126,11 @@ check "一共转发 3 条" '[ "$(grep -c "^飞书转发: " "$TMP/r.out")" = 3 ]'
 check "放行的 5 条消息都加了「了解」表情，不认识的群不加" '[ "$(grep -c "reactions create.*emoji_type\\\":\\\"Get" "$TMP/calls")" = 5 ] && ! grep -q om_r5 "$TMP/calls"'
 kill_tree "$R"; sleep 0.3
 hk() { printf '{"session_id":"g","stop_hook_active":false}' | bash "$TMP/hooks/ensure-listener.sh"; }
+: > "$TMP/calls"; out=$(hk); sleep 0.5
+check "Larkspur 没在运行时，普通会话不唤醒谁，只在群里提醒" '[ -z "$out" ] && grep -q "messages-send.*oc_g.*Larkspur 没在运行" "$TMP/calls"'
+bash -c 'exec -a larkspurd-fake sleep 300' & DPID=$!; echo "{\"pid\":$DPID,\"port\":1}" > "$TMP/run/daemon.json"
 out=$(hk)
-check "总控监听停了时，普通会话被要求提醒总控" 'printf "%s" "$out" | jq -e ".decision==\"block\" and (.reason|contains(\"local_h\"))" >/dev/null'
+check "Larkspur 在运行、总控没在读事件时，普通会话被要求提醒总控" 'printf "%s" "$out" | jq -e ".decision==\"block\" and (.reason|contains(\"local_h\"))" >/dev/null'
 check "5 分钟内不重复提醒" '[ -z "$(hk)" ]'
+kill "$DPID" 2>/dev/null
 exit $fail

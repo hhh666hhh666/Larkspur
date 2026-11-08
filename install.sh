@@ -21,6 +21,8 @@ mkdir -p "$DEST/hooks" "$DEST/sessions"
 # 先写临时文件再 mv 替换：正在运行的监听脚本仍读旧文件，不会被就地改写打乱
 put() { cp "$1" "$2.new.$$" && mv -f "$2.new.$$" "$2"; }
 for f in "$SRC"/lib/*.sh;   do put "$f" "$DEST/$(basename "$f")"; done
+put "$SRC/lib/larkspurd.py" "$DEST/larkspurd.py"; chmod +x "$DEST/larkspurd.py"
+mkdir -p "$DEST/web"; put "$SRC/lib/web/index.html" "$DEST/web/index.html"
 for f in "$SRC"/hooks/*.sh; do put "$f" "$DEST/hooks/$(basename "$f")"; done
 chmod +x "$DEST"/*.sh "$DEST"/hooks/*.sh
 say "脚本已安装到 $DEST"
@@ -79,26 +81,49 @@ elif [ -f "$gate" ] && grep -q 'Claude 桌面端的启动闸门' "$gate"; then
   rm -f "$gate"; say "没有配置 LARKSPUR_EXPECTED_IP，已移除桌面端启动闸门"
 fi
 
-# 6. 「IP 闸门」设置程序：~/.local/bin/larkspur-ip-gate，桌面图标和应用菜单里各放一个
-ui="$HOME/.local/bin/larkspur-ip-gate"
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
-put "$SRC/lib/ip-gate-ui.sh" "$ui"; chmod +x "$ui"
-entry="[Desktop Entry]
+# 6. 常驻服务 larkspurd：systemd 用户服务（不设开机自启，由桌面上的「Larkspur」图标打开、网页控制台里关闭）
+command -v python3 >/dev/null || die "需要 python3（常驻服务和本地网页控制台用）"
+if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
+  mkdir -p "$HOME/.config/systemd/user"
+  cat > "$HOME/.config/systemd/user/larkspur.service" <<UNIT
+[Unit]
+Description=Larkspur 常驻服务（飞书监听、网络检测、IP 守卫、本地网页控制台）
+
+[Service]
+ExecStart=/usr/bin/env python3 $DEST/larkspurd.py
+Environment=LARKSPUR_HOME=$DEST
+Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+# 网页上点「关闭」是正常退出（0），不会被拉起；意外崩溃才自动重启
+Restart=on-failure
+RestartSec=5
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user try-restart larkspur.service 2>/dev/null || true   # 已在运行就换上新代码
+  say "常驻服务已注册为 systemd 用户服务 larkspur.service"
+else
+  say "没有 systemd 用户服务，Larkspur 会直接在后台运行"
+fi
+
+# 7. 旧版的「IP 闸门」设置程序已由本地网页控制台取代，清掉旧文件
+desk=$(xdg-user-dir DESKTOP 2>/dev/null || true)
+rm -f "$HOME/.local/bin/larkspur-ip-gate" "$HOME/.local/share/applications/larkspur-ip-gate.desktop" ${desk:+"$desk/IP闸门.desktop"}
+mkdir -p "$HOME/.local/share/applications"
+
+# 8. 「Larkspur」图标：启动常驻服务并在浏览器里打开本地控制台（关闭在网页上）
+app="[Desktop Entry]
 Type=Application
-Name=IP 闸门
-Comment=设置是否启用出口 IP 检查（Larkspur）
-Exec=$ui
-Icon=preferences-system-network-proxy
+Name=Larkspur
+Comment=启动 Larkspur 并打开本地控制台
+Exec=$DEST/larkspurctl.sh open
+Icon=applications-internet
 Terminal=false
 Categories=Utility;Network;"
-printf '%s\n' "$entry" > "$HOME/.local/share/applications/larkspur-ip-gate.desktop"
-desk=$(xdg-user-dir DESKTOP 2>/dev/null || true)
+printf '%s\n' "$app" > "$HOME/.local/share/applications/larkspur.desktop"
 if [ -n "$desk" ] && [ -d "$desk" ] && [ "$desk" != "$HOME" ]; then
-  printf '%s\n' "$entry" > "$desk/IP闸门.desktop"; chmod +x "$desk/IP闸门.desktop"
-  # XFCE 只直接运行被标记为可信的桌面启动器
-  command -v gio >/dev/null && gio set -t string "$desk/IP闸门.desktop" metadata::xfce-exe-checksum \
-    "$(sha256sum "$desk/IP闸门.desktop" | cut -d' ' -f1)" 2>/dev/null || true
-  say "「IP 闸门」设置程序已放到桌面：$desk/IP闸门.desktop"
+  printf '%s\n' "$app" > "$desk/Larkspur.desktop"; chmod +x "$desk/Larkspur.desktop"
+  command -v gio >/dev/null && gio set -t string "$desk/Larkspur.desktop" metadata::xfce-exe-checksum \
+    "$(sha256sum "$desk/Larkspur.desktop" | cut -d' ' -f1)" 2>/dev/null || true
+  say "「Larkspur」图标已放到桌面：双击启动并打开本地控制台"
 fi
 
 say "完成。已打开的会话可能需要重开才会加载新钩子与技能。"

@@ -44,9 +44,19 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
   local now hc started up="" sessions today mem events
   now=$(date +%s)
   hc=$(hub_chat || true)
-  if [ -n "$hc" ] && listener_alive "$hc.msg"; then
-    started=$(cat "$RUN_DIR/$hc.started" 2>/dev/null || echo "$now"); up="运行中（已运行 $(( (now - started) / 60 )) 分钟）"
-  elif [ -n "$hc" ]; then up="已停止"; else up="没有总控"; fi
+  # 飞书监听由常驻服务 larkspurd 负责，总控会话只读它写的事件队列
+  local dalive=false reader=false pending=0 web=""
+  if daemon_alive; then
+    dalive=true
+    started=$(jq -r '.started // empty' "$RUN_DIR/daemon.json" 2>/dev/null); started=${started:-$now}
+    web=$(jq -r 'if .port then "http://localhost:\(.port)/" else "" end' "$RUN_DIR/daemon.json" 2>/dev/null)
+    if [ -z "$hc" ]; then up="运行中（没有总控，不收飞书消息）"
+    elif listener_alive "$hc.msg"; then up="运行中（已运行 $(( (now - started) / 60 )) 分钟）"
+    else up="运行中，飞书监听正在重连"; fi
+  else up="<font color=\"red\">没在运行</font>（在电脑桌面点「Larkspur」打开）"; fi
+  listener_alive inbox && reader=true
+  local dstate gatelast; dstate=$(desktop_state); gatelast=$(desktop_gate_last)
+  pending=$(grep -c '' "$RUN_DIR/hub-queue" 2>/dev/null); pending=${pending:-0}
 
   sessions=$(for f in "$STATE_DIR"/*.json; do [ -f "$f" ] || continue
       sid=$(jq -r '.session_id' "$f"); t=$(ls "$HOME"/.claude/projects/*/"$sid.jsonl" 2>/dev/null | head -1)
@@ -71,13 +81,13 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
           | jq -Rsc 'split("\n") | map(select(length>0) | split(" ") | {(.[0]): (.[1]|tonumber)}) | add // {}')
 
   mem=0
-  for p in $(pgrep -f 'lark-cli event|/listen(-cards|-menu)?\.sh|/netwatch\.sh' 2>/dev/null); do
+  for p in $(pgrep -f 'lark-cli event|/listen(-cards|-menu|-inbox)?\.sh|/netwatch\.sh|larkspurd' 2>/dev/null); do
     k=$(awk '/^Pss:/{print $2}' "/proc/$p/smaps_rollup" 2>/dev/null)
     [ -n "$k" ] || k=$(ps -p "$p" -o rss= 2>/dev/null | tr -d ' ')
     mem=$((mem + ${k:-0}))
   done
 
-  events=$(tail -n 200 "$LOG" 2>/dev/null | grep -E ' (inbound|route|outbound|outbound-failed|backfill|listener-takeover|listener-missing|hub-listener-missing|spawn|on|off|hub-on|route-skip) ' \
+  events=$(tail -n 200 "$LOG" 2>/dev/null | grep -E ' (inbound|route|outbound|outbound-failed|backfill|listener-takeover|listener-missing|hub-listener-missing|spawn|on|off|hub-on|route-skip|daemon-start|daemon-stop) ' \
            | tail -n 8 | while IFS= read -r l; do   # 时间换成显示时区
                e=$(date -d "${l:0:19}" +%s 2>/dev/null) && hm=$(TZ="$DISPLAY_TZ" date -d "@$e" +%H:%M) || hm="${l:11:5}"
                printf '%s %s\n' "$hm" "${l:20}"
@@ -91,11 +101,12 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
   fi
 
   [ -n "$today" ] || today='{}'; [ -n "$events" ] || events='[]'; [ -n "$net" ] || net='{}'
-  jq -cn --argjson net "$net" --arg now "$now" --arg netint "$NET_REFRESH" --arg expip "$EXPECTED_IP" --arg guard "$IP_GUARD_CMD" --arg guardon "$IP_GUARD" --arg gateon "$DESKTOP_GATE" --arg mode "$(router_active && echo router || echo none)" --arg up "$up" --argjson s "$sessions" \
+  jq -cn --argjson net "$net" --arg now "$now" --argjson dalive "$dalive" --argjson reader "$reader" --arg dstate "$dstate" --arg gatelast "$gatelast" --arg pending "$pending" --arg web "$web" --arg netint "$NET_REFRESH" --arg expip "$EXPECTED_IP" --arg guard "$IP_GUARD_CMD" --arg guardon "$IP_GUARD" --arg gateon "$DESKTOP_GATE" --arg mode "$(router_active && echo router || echo none)" --arg up "$up" --argjson s "$sessions" \
      --argjson today "$today" --arg mem "$(( mem / 1024 ))" --argjson ev "$events" \
      --arg ack "$ACK_EMOJI" --arg wait "$IMAGE_WAIT" --arg bf "$BACKFILL_HOURS" --arg sm "$SPAWN_MODE" \
      --arg alerts "$ALERTS" --arg prefix "$GROUP_PREFIX" --arg root "$PROJECTS_ROOT" --arg time "$(TZ="$DISPLAY_TZ" date +%H:%M:%S)" \
-     '{mode:$mode, up:$up, sessions:$s, today:$today, mem:$mem, events:$ev, time:$time, net:$net, now:($now|tonumber), netint:($netint|tonumber? // 0), expip:$expip, guard:$guard, guardon:$guardon, gateon:$gateon,
+     '{mode:$mode, up:$up, sessions:$s, today:$today, mem:$mem, events:$ev, time:$time, net:$net, now:($now|tonumber), daemon:$dalive, reader:$reader, desktop:$dstate,
+       gatelast:(if $gatelast == "" then null else ($gatelast | capture("^(?<t>\\S+ \\S+) desktop-gate (?<r>\\S+)(?<rest>.*)$")) end), pending:($pending|tonumber? // 0), web:$web, netint:($netint|tonumber? // 0), expip:$expip, guard:$guard, guardon:$guardon, gateon:$gateon,
        opt:{ack:$ack, wait:$wait, backfill:$bf, spawn:$sm, alerts:$alerts, prefix:$prefix, root:$root}}'
 }
 
@@ -119,7 +130,7 @@ render() {   # <page> [提示] → 卡片 JSON
         behaviors:cb({op:"set", key:$k})};
     {inbound:"收到", route:"转发", outbound:"发回飞书", "outbound-failed":"发回失败", backfill:"补发",
                 "listener-takeover":"监听接替", "listener-missing":"监听停止", "hub-listener-missing":"总控监听停止",
-                spawn:"新建会话", on:"开启同步", off:"关闭同步", "hub-on":"开启总控", "route-skip":"未转发"} as $labels
+                spawn:"新建会话", on:"开启同步", off:"关闭同步", "hub-on":"开启总控", "route-skip":"未转发", "daemon-start":"启动 Larkspur", "daemon-stop":"关闭 Larkspur"} as $labels
     | $d
     | ([ $d.sessions[] | {key:.chat, value:.name}, {key:.sid, value:.name}, {key:.desk, value:.name} ] | from_entries) as $names
     | (([ $d.sessions[] | select(.active) ] | sort_by(.hub | not)) as $act
@@ -154,7 +165,9 @@ render() {   # <page> [提示] → 卡片 JSON
             md("**项目根目录**　新建会话卡片里列出的目录，改完按回车保存"),
             setinput("root"; $d.opt.root; "绝对路径"),
           md("<font color=\"grey\">接收方式：只由总控统一监听并转发，不允许各会话自己监听。没有总控时各会话收不到飞书消息，在一个常开的会话里执行 /feishu hub 即可。</font>") ]) as $opts
-    | ([ md("**接收方式**　\(if $d.mode == "router" then "总控统一转发" else "<font color=\"red\">没有总控，各会话收不到消息</font>" end)\n**总控监听**　\($d.up)\n**同步中的会话**　\([$d.sessions[] | select(.active and (.hub | not))] | length) 个\n**今天**　收到 \($d.today.inbound // 0) 条 · 转发 \($d.today.route // 0) 条 · 发回 \($d.today.outbound // 0) 条\(if ($d.today["outbound-failed"] // 0) > 0 then " · <font color=\"red\">发回失败 \($d.today["outbound-failed"]) 次</font>" else "" end)\n**常驻内存**　\($d.mem) MB"),
+    | ([ md("**接收方式**　\(if $d.mode == "router" then "总控统一转发" else "<font color=\"red\">没有总控，各会话收不到消息</font>" end)\n**Larkspur 服务**　\($d.up)\n**总控会话**　\(if $d.reader then "在读取" else "<font color=\"red\">没在读取</font>" end)\(if $d.pending > 0 then "　<font color=\"grey\">\($d.pending) 条事件排队中</font>" else "" end)\n**Claude 桌面端**　\(if $d.desktop == "running" then "运行中" elif $d.desktop == "starting" then "正在启动（检查出口 IP 中）" else "<font color=\"grey\">没在运行（只能手动启动）</font>" end)\(if $d.desktop != "running" and ($d.gatelast.r // "") == "refused" then "\n<font color=\"red\">上次启动被闸门拦下（\($d.gatelast.t[11:16])）：出口 IP 不符</font>" else "" end)\(if $d.web != "" then "\n**本地控制台**　" + $d.web else "" end)\n**同步中的会话**　\([$d.sessions[] | select(.active and (.hub | not))] | length) 个\n**今天**　收到 \($d.today.inbound // 0) 条 · 转发 \($d.today.route // 0) 条 · 发回 \($d.today.outbound // 0) 条\(if ($d.today["outbound-failed"] // 0) > 0 then " · <font color=\"red\">发回失败 \($d.today["outbound-failed"]) 次</font>" else "" end)\n**常驻内存**　\($d.mem) MB"),
+          (if $d.desktop == "stopped" then row([btn("启动桌面端"; {op:"desktop"}; "primary")
+             + {confirm:{title:pt("启动 Claude 桌面端？"), text:pt("会先检查三个出口 IP，相符才启动。")}}]) else empty end),
           md("**最近事件**\n" + (if ($d.events | length) == 0 then "<font color=\"grey\">暂无</font>" else
              ($d.events | map(split(" ") as $w
                | ($w[1]) as $t
@@ -209,7 +222,7 @@ render() {   # <page> [提示] → 卡片 JSON
                       elif all($ips[]; . == $d.expip) then tag("一致"; "green") else tag("未查全"; "neutral") end)
                    + "\n**启动闸门** \(if $d.gateon == "off" then tag("已关闭"; "neutral") else tag("开"; "green") end)　桌面端启动前检查，不通过不启动"
                    + "\n**运行中守卫** \(if $d.guardon == "off" then tag("已关闭"; "neutral") else tag("开"; "green") end)　每次刷新后检查，不符时\(if $d.guard != "" then "运行 " + ($d.guard | split("/") | last) else "只提醒（没有配置守卫命令）" end)"
-                   + "\n<font color=\"grey\">在电脑桌面的「IP 闸门」程序里开关</font>") end),
+                   + "\n<font color=\"grey\">在本地网页控制台里开关（电脑桌面「Larkspur」图标）</font>") end),
              md("<font color=\"grey\">检测于 \($n.at_text // "")　·　\(if $d.netint > 0 then "每 \($d.netint) 秒自动检测" else "自动检测已关闭" end)　·　数据来自 ip.net.coffee　·　WebRTC 只存在于浏览器，不检测</font>") ]
        end
        + [ row([btn("重新检测"; {op:"netcheck"}; "primary"),
@@ -249,6 +262,27 @@ publish() {   # <page> [提示] [force_new]：原地更新；失败或没有卡�
   fs_log "console-new mid=$mid"
 }
 
+do_set() {   # <键> <值>：校验并写入 config.sh，出错时把原因放进 err（飞书卡片和本地网页控制台共用）
+  local k="$1" x="$2"; err=""
+  case "$k" in
+    ack)      case "$x" in Get|OK|THUMBSUP|DONE) set_config LARKSPUR_ACK_EMOJI "$x" ;; off) set_config LARKSPUR_ACK_EMOJI "" ;; *) err="无效的表情" ;; esac ;;
+    wait)     case "$x" in 0|3|5|10) set_config LARKSPUR_IMAGE_WAIT "$x" ;; *) err="无效的秒数" ;; esac ;;
+    backfill) case "$x" in 0|1|6|12|24) set_config LARKSPUR_BACKFILL_HOURS "$x" ;; *) err="无效的时长" ;; esac ;;
+    spawn)    case "$x" in none) set_config LARKSPUR_SPAWN_PERMISSION_MODE "" ;; acceptEdits|bypassPermissions) set_config LARKSPUR_SPAWN_PERMISSION_MODE "$x" ;; *) err="无效的模式" ;; esac ;;
+    alerts)   case "$x" in on|off) set_config LARKSPUR_ALERTS "$x" ;; *) err="无效的选项" ;; esac ;;
+    prefix)   x=$(printf '%s' "$x" | tr -d '\n\r')
+              if [ -n "$x" ] && [ "${#x}" -le 20 ]; then set_config LARKSPUR_GROUP_PREFIX "$x"; else err="群名前缀要在 1～20 个字之间"; fi ;;
+    root)     x=$(printf '%s' "$x" | tr -d '\n\r'); x="${x/#\~/$HOME}"
+              if [ -d "$x" ]; then set_config LARKSPUR_PROJECTS_ROOT "$x"; else err="目录不存在：$x"; fi ;;
+    gate)     case "$x" in on|off) set_config LARKSPUR_DESKTOP_GATE "$x" ;; *) err="无效的选项" ;; esac ;;
+    guard)    case "$x" in on|off) set_config LARKSPUR_IP_GUARD "$x" ;; *) err="无效的选项" ;; esac ;;
+    webport)  if [[ "$x" =~ ^[0-9]+$ ]] && [ "$x" -ge 1024 ] && [ "$x" -le 65535 ]; then set_config LARKSPUR_WEB_PORT "$x"; else err="端口要在 1024～65535 之间"; fi ;;
+    expip)    x=$(printf '%s' "$x" | tr -d '[:space:]')
+              if printf '%s' "$x" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then set_config LARKSPUR_EXPECTED_IP "$x"; else err="不是有效的 IPv4 地址"; fi ;;
+    *)        err="未知设置：$k" ;;
+  esac
+}
+
 case "${1:-show}" in
   show)    publish "${2:-$(cget page)}" "${3:-}"   # 页面：none（全部收起）、status、sessions、net、options
            # 网络检测结果超过 30 分钟（或要看的就是网络页且超过 5 分钟）时，在后台重新检测，完成后再刷新一次
@@ -258,10 +292,16 @@ case "${1:-show}" in
            fi ;;
   refresh) [ -n "$(cget message_id)" ] && publish "$(cget page)" ;;
   render)  render "${2:-status}" "${3:-}" ;;   # 只输出卡片 JSON，测试用
+  data)    collect ;;                          # 渲染用的原始数据（JSON），本地网页控制台用
+  set)     do_set "${2:-}" "${3:-}"; fs_log "console-set key=${2:-} ok=$([ -z "$err" ] && echo 1 || echo 0) via=cli"
+           [ -z "$err" ] || { echo "$err" >&2; exit 1; } ;;
   action)
     v="${2:-}"; [ -n "$v" ] || v='{}'; fv="${3:-}"; op=$(printf '%s' "$v" | jq -r '.op // ""'); page=$(cget page); page=${page:-status}
     case "$op" in
       page|refresh) publish "$(printf '%s' "$v" | jq -r '.page // "status"')" ;;
+      desktop)   # 手动启动桌面端（经过启动闸门）；结果过几秒才知道，先提示，稍后刷新一次
+        msg=$("$LARKSPUR_HOME/desktop-start.sh" feishu 2>&1); publish status "$msg"
+        ( sleep 15; "$LARKSPUR_HOME/console.sh" refresh >/dev/null 2>&1 & ) ;;
       netcheck)   # 先给个「检测中」，检测完再原地更新
         publish net "正在检测，约 10 秒…"
         if "$LARKSPUR_HOME/netcheck.sh" >/dev/null 2>&1; then publish net; else publish net "检测失败，请稍后再试"; fi
@@ -280,18 +320,7 @@ case "${1:-show}" in
         publish sessions "已请总控归档，稍等片刻后点「刷新」" ;;
       set)   # 单项设置：保存即可，客户端已经显示了新值，成功时不必刷新卡片（省一次接口调用）
         k=$(printf '%s' "$v" | jq -r '.key // ""'); x="${3:-}"; err=""
-        case "$k" in
-          ack)      case "$x" in Get|OK|THUMBSUP|DONE) set_config LARKSPUR_ACK_EMOJI "$x" ;; off) set_config LARKSPUR_ACK_EMOJI "" ;; *) err="无效的表情" ;; esac ;;
-          wait)     case "$x" in 0|3|5|10) set_config LARKSPUR_IMAGE_WAIT "$x" ;; *) err="无效的秒数" ;; esac ;;
-          backfill) case "$x" in 0|1|6|12|24) set_config LARKSPUR_BACKFILL_HOURS "$x" ;; *) err="无效的时长" ;; esac ;;
-          spawn)    case "$x" in none) set_config LARKSPUR_SPAWN_PERMISSION_MODE "" ;; acceptEdits|bypassPermissions) set_config LARKSPUR_SPAWN_PERMISSION_MODE "$x" ;; *) err="无效的模式" ;; esac ;;
-          alerts)   case "$x" in on|off) set_config LARKSPUR_ALERTS "$x" ;; *) err="无效的选项" ;; esac ;;
-          prefix)   x=$(printf '%s' "$x" | tr -d '\n\r')
-                    if [ -n "$x" ] && [ "${#x}" -le 20 ]; then set_config LARKSPUR_GROUP_PREFIX "$x"; else err="群名前缀要在 1～20 个字之间"; fi ;;
-          root)     x=$(printf '%s' "$x" | tr -d '\n\r'); x="${x/#\~/$HOME}"
-                    if [ -d "$x" ]; then set_config LARKSPUR_PROJECTS_ROOT "$x"; else err="目录不存在：$x"; fi ;;
-          *)        err="未知设置：$k" ;;
-        esac
+        do_set "$k" "$x"
         fs_log "console-set key=$k ok=$([ -z "$err" ] && echo 1 || echo 0)"
         if [ -n "$err" ]; then . "$CONFIG"; . "$LARKSPUR_HOME/common.sh"; publish options "没有保存：$err"; fi ;;
       save)
@@ -311,5 +340,5 @@ case "${1:-show}" in
         if [ -n "$errs" ]; then publish options "已保存其余设置；未保存：$errs"; else publish options "已保存，立即生效"; fi ;;
       *) publish "$page" ;;
     esac ;;
-  *) echo "用法：console.sh show [status|sessions|net|options] | refresh | action <value> [form]" >&2; exit 1 ;;
+  *) echo "用法：console.sh show [status|sessions|net|options] | refresh | action <value> [form] | data | set <键> <值>" >&2; exit 1 ;;
 esac

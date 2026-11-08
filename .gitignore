@@ -2,3 +2,4 @@ config.sh
 sessions/
 *.log
 *.larkspur-bak.*
+__pycache__/

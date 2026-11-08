@@ -72,13 +72,13 @@ reset
 jq -n '{session_id:"hubsid", desktop_id:"local_hub", chat_id:"oc_hub", active:true, role:"hub"}' > "$TMP/sessions/hubsid.json"
 jq -n '{session_id:"g", desktop_id:"local_g", chat_id:"oc_g", active:true}' > "$TMP/sessions/g.json"
 err=$(echo '{"session_id":"hubsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
-check "桌面端拉起总控会话、监听没在跑时唤醒它启动监听" '[ $r = 2 ] && printf "%s" "$err" | grep -q "listen.sh oc_hub --hub"'
+check "桌面端拉起总控会话、事件读取没在跑时唤醒它启动" '[ $r = 2 ] && printf "%s" "$err" | grep -q "listen-inbox.sh"'
 err=$(echo '{"session_id":"newsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
 check "总控换了会话 ID 也能按桌面端会话 ID 认出来" '[ $r = 2 ]'
-bash -c 'exec -a listen-fake sleep 300' & lp=$!; echo "$lp" > "$TMP/run/oc_hub.msg.pid"   # 让监听看起来活着
+bash -c 'exec -a listen-fake sleep 300' & lp=$!; echo "$lp" > "$TMP/run/inbox.pid"   # 让总控的事件读取看起来活着
 err=$(echo '{"session_id":"hubsid"}' | CLAUDE_CODE_HOST_SESSION_ID=local_hub bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
-check "总控监听已在跑时不唤醒" '[ $r = 0 ]'
-kill "$lp" 2>/dev/null; rm -f "$TMP/run/oc_hub.msg.pid"
+check "总控的事件读取已在跑时不唤醒" '[ $r = 0 ]'
+kill "$lp" 2>/dev/null; rm -f "$TMP/run/inbox.pid"
 err=$(echo '{"session_id":"g"}' | LARKSPUR_HUB_RELAY_DELAY=0 CLAUDE_CODE_HOST_SESSION_ID=local_g bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
 check "总控没被拉起时，由开着同步的会话转告总控" '[ $r = 2 ] && printf "%s" "$err" | grep -q "local_hub"'
 err=$(echo '{"session_id":"g"}' | LARKSPUR_HUB_RELAY_DELAY=0 CLAUDE_CODE_HOST_SESSION_ID=local_g bash "$TMP/session-start.sh" 2>&1 >/dev/null); r=$?
@@ -92,23 +92,4 @@ check "启动闸门关闭时不检查直接启动" '[ $r = 0 ] && [ -f "$TMP/des
 printf 'LARKSPUR_IP_GUARD="off"\n' >> "$TMP/config.sh"
 reset; FAKE_CN=9.9.9.9 bash "$TMP/ipguard.sh"; r=$?
 check "运行中守卫关闭时不动手" '[ $r = 0 ] && [ ! -f "$TMP/guard-ran" ]'
-# 设置程序：假 zenity 按 FAKE_Z_LIST 回答勾选框，其余对话框直接确定
-cat > "$TMP/bin/zenity" <<'Z'
-#!/usr/bin/env bash
-echo "$*" >> "$LARKSPUR_HOME/zenity-calls"
-case "$*" in
-  *--progress*) cat >/dev/null ;;
-  *--checklist*) printf '%s\n' "$FAKE_Z_LIST"; exit "${FAKE_Z_RC:-0}" ;;
-  *--entry*) printf '%s\n' "$FAKE_Z_ENTRY" ;;
-esac
-exit 0
-Z
-chmod +x "$TMP/bin/zenity"; ok
-FAKE_Z_LIST="gate guard" bash "$TMP/ip-gate-ui.sh"
-check "设置程序：勾选两项后写回 on" 'grep -q "^LARKSPUR_DESKTOP_GATE=\"on\"" "$TMP/config.sh" && grep -q "^LARKSPUR_IP_GUARD=\"on\"" "$TMP/config.sh"'
-check "设置程序：先现查并显示三个出口 IP" 'grep -q "Cloudflare $E" "$TMP/zenity-calls"'
-FAKE_Z_LIST="guard" bash "$TMP/ip-gate-ui.sh"
-check "设置程序：取消勾选启动闸门后写回 off" 'grep -q "^LARKSPUR_DESKTOP_GATE=\"off\"" "$TMP/config.sh" && grep -q "^LARKSPUR_IP_GUARD=\"on\"" "$TMP/config.sh"'
-FAKE_Z_LIST="" FAKE_Z_RC=1 bash "$TMP/ip-gate-ui.sh"
-check "设置程序：点取消不改配置" 'grep -q "^LARKSPUR_DESKTOP_GATE=\"off\"" "$TMP/config.sh"'
 exit $fail

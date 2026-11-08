@@ -26,10 +26,11 @@ disable-model-invocation: true
 
 把当前会话设为总控：同步对象是用户和机器人的**私聊**，不另建群。总控既能正常对话，也能按命令新建会话，还负责把其他会话专属群里的消息转发进对应会话（在桌面端显示为消息气泡）。
 
-1. 调用 `mcp__ccd_session_mgmt__get_session`（`session_id: "self"`）取 `sessionId`，运行 `~/.claude/larkspur/hub-on.sh "$CLAUDE_CODE_SESSION_ID" "<sessionId>"`，stdout 是私聊的 chat_id。
-2. 用 Monitor 启动监听（私聊消息、卡片提交和要转发的群消息都从这一路出来）：command `~/.claude/larkspur/listen.sh <chat_id> --hub`，description `飞书私聊（总控）`，timeout_ms `1800000`。
-3. 其他会话如果还挂着自己的飞书监听（旧版本留下的），总控监听启动时会把它们停掉，不用管。
-4. 简短告诉用户：总控已开启。
+飞书监听本身由常驻服务 **Larkspur**（larkspurd，不依赖桌面端）负责，它把事件写进队列；总控只用一个 Monitor 读队列。
+
+1. 调用 `mcp__ccd_session_mgmt__get_session`（`session_id: "self"`）取 `sessionId`，运行 `~/.claude/larkspur/hub-on.sh "$CLAUDE_CODE_SESSION_ID" "<sessionId>"`，stdout 是私聊的 chat_id。它会顺手启动 Larkspur（已在运行就跳过）；stderr 说没能启动时，告诉用户原因。
+2. 用 Monitor 读取飞书事件（私聊消息、卡片提交、要转发的群消息、控制台请求都从这一路出来）：command `~/.claude/larkspur/listen-inbox.sh`，description `飞书私聊（总控）`，timeout_ms `1800000`。**不要**在 Monitor 里运行 `listen.sh`。
+3. 简短告诉用户：总控已开启；本地控制台地址用 `~/.claude/larkspur/larkspurctl.sh status` 查。
 
 **转发**：收到 `飞书转发: {"to","chat","group","message"}` 时：
 1. 用 `mcp__ccd_session_mgmt__send_message`（未加载时先用 ToolSearch 加载）向 `to` 发送 `message`，**原样发送，一个字都不要改**。一次收到多条就逐条发送。
@@ -86,8 +87,10 @@ disable-model-invocation: true
 - `飞书提示: 仅收到图片…`：用户只发了图、3 秒内没有文字。把图片本身当作一条完整的消息，像聊天一样自然地回应（看图说出它是什么、有什么值得一提的），不要反问「要我做什么」。
 - 监听连上时不会发「就绪」事件；旧版本若发了 `飞书监听已就绪`，不要回复、不要输出任何文字。
 - `飞书监听状态: 总控已接管…` 或 `飞书监听状态: 普通会话不能自己监听…`：本会话不是总控，**不要**重启这个 Monitor，也不要输出任何文字。
+- `飞书监听状态: 飞书监听已交给 Larkspur 常驻服务…`：旧的 Monitor 还在运行 `listen.sh`。按提示改用 `listen-inbox.sh` 启动 Monitor，以后续期也用它，不输出任何文字。
+- `飞书监听状态: Larkspur 没在运行…`：用户在本地控制台关掉了 Larkspur，或还没打开。简短告诉用户一次即可，**不要**自己启动它（打开与否由用户决定）。
 - 其他 `飞书监听状态: …`、`飞书卡片监听状态: …`：出错时简短告诉用户；无关紧要的状态不要回复。
-- Monitor 到期或结束通知：**立即用同样的参数重新启动那一路 Monitor，并且不输出任何文字**（Stop 钩子对无文本回合不发飞书）。只有用户执行了 `/feishu off` 才不再续期。
+- Monitor 到期或结束通知：**立即用同样的参数重新启动那一路 Monitor（总控是 `listen-inbox.sh`），并且不输出任何文字**（Stop 钩子对无文本回合不发飞书）。只有用户执行了 `/feishu off` 才不再续期。
 - `飞书提示: 监听中断期间收到 N 条消息…`：后面跟着的是监听停掉那段时间里用户发的消息（已去重、按时间顺序）。照常逐条引用并回答，可以顺带说明是延迟收到的。
 - SessionStart 钩子提示「【Larkspur】Claude 桌面端刚启动…」：桌面端重启后自动恢复总控。按提示做（总控用 Monitor 启动监听；普通会话给总控发消息），不输出任何文字。
 - Stop 钩子提示「【Larkspur】…监听已经停止」：进程重启或上下文压缩把 Monitor 弄丢了。按提示做（总控重启自己的 Monitor，普通会话提醒总控），不输出任何文字。同一个群只会保留一个监听，新的会顶替旧的，不用担心重复。
