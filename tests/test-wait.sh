@@ -43,7 +43,8 @@ waitfor '[ "$(cat "$TMP/run/inbox.pid" 2>/dev/null)" = "$A" ]'
 check "等待进程登记为总控的事件读取，状态为等待中" 'listener_alive inbox && [ "$(hub_reader_state)" = waiting ]'
 check "飞书卡片：总控显示等待中" 'bash "$TMP/console.sh" render status | grep -q "等待中（有消息才唤醒）"'
 bash "$W" h local_h 2> "$TMP/b.err" & B=$!
-waitfor '! kill -0 "$A" 2>/dev/null'; wait "$A"; ra=$?
+wait "$A"; ra=$?   # A 是本脚本的子进程：先收掉它，B 才看得到它已退出、登记自己
+waitfor '[ "$(cat "$TMP/run/inbox.pid" 2>/dev/null)" = "$B" ]'
 check "新的等待进程顶替旧的，旧的不唤醒总控" '[ "$ra" != 2 ] && [ "$(cat "$TMP/run/inbox.pid")" = "$B" ] && ! grep -q "飞书事件" "$TMP/a.err"'
 echo '飞书消息（用户，text）: 顶替后来的' >> "$Q"
 wait "$B"; rb=$?
@@ -92,6 +93,32 @@ check "总控刚被唤醒、正在处理时，普通会话不提醒总控" '[ -z
 out=$(printf '{"session_id":"h","stop_hook_active":false}' | bash "$TMP/hooks/ensure-listener.sh")
 check "总控自己的同步 Stop 钩子不再拦下（接收交给 hub-wait.sh）" '[ -z "$out" ]'
 kill "$DPID" 2>/dev/null
+
+# 总控停着时由服务拉起：打开桌面端里的总控会话
+mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho "$*" >> "%s/opened"\n' "$TMP" > "$TMP/bin/opener"; chmod +x "$TMP/bin/opener"
+cp "$(command -v bash)" "$TMP/bin/fakedesk"; cp "$(command -v bash)" "$TMP/bin/fakeclaude"
+export LARKSPUR_OPENER="$TMP/bin/opener" LARKSPUR_DESKTOP_COMM=fakedesk LARKSPUR_CLAUDE_COMM=fakeclaude
+rm -f "$TMP/run/inbox.handoff" "$TMP/opened"; : > "$Q"
+bash "$TMP/hub-revive.sh"; r=$?
+check "拉起总控：队列是空的就不做" '[ $r = 1 ] && [ ! -f "$TMP/opened" ]'
+echo '飞书消息（用户，text）: 桌面端重启后发到群里的' >> "$Q"
+bash "$TMP/hub-revive.sh"; r=$?
+check "拉起总控：桌面端没开时不做（链接会把桌面端启动起来）" '[ $r = 2 ] && [ ! -f "$TMP/opened" ] && grep -q "hub-revive-skipped reason=desktop-not-running" "$TMP/larkspur.log"'
+"$TMP/bin/fakedesk" -c "sleep 60; true" & FD=$!; sleep 0.3
+LARKSPUR_REVIVE_INTERVAL=0 bash "$TMP/hub-revive.sh" test; r=$?; sleep 0.3
+check "拉起总控：桌面端开着就打开总控会话的链接" '[ $r = 0 ] && grep -qx "claude://claude.ai/epitaxy/local_h" "$TMP/opened"'
+check "飞书卡片：桌面端开着、总控会话没在运行时，提示会自动拉起" 'bash "$TMP/console.sh" render status | grep -q "已停止.*飞书一来消息就会自动打开总控会话"'
+bash "$TMP/hub-revive.sh"; r=$?
+check "拉起总控：2 分钟内不重复" '[ $r = 3 ] && [ "$(wc -l < "$TMP/opened")" = 1 ]'
+CLAUDE_CODE_HOST_SESSION_ID=local_h "$TMP/bin/fakeclaude" -c "sleep 60; true" & FC=$!; sleep 0.3
+LARKSPUR_REVIVE_INTERVAL=0 bash "$TMP/hub-revive.sh"; r=$?
+check "拉起总控：总控的 Claude 进程已经在跑时不开链接，只记日志" '[ $r = 2 ] && [ "$(wc -l < "$TMP/opened")" = 1 ] && grep -q "hub-revive-skipped reason=process-running" "$TMP/larkspur.log"'
+check "飞书卡片：总控会话开着却没在等事件时，提示去里面发句话" 'bash "$TMP/console.sh" render status | grep -q "已停止.*在它里面随便发一句话即可恢复"'
+kill "$FC"
+echo "$(date +%s) $$" > "$TMP/run/inbox.handoff"
+LARKSPUR_REVIVE_INTERVAL=0 bash "$TMP/hub-revive.sh"; r=$?
+check "拉起总控：总控正在处理时不需要" '[ $r = 1 ] && [ "$(wc -l < "$TMP/opened")" = 1 ]'
+kill "$FD" 2>/dev/null; rm -f "$TMP/run/inbox.handoff"
 
 out=$(bash "$TMP/listen-inbox.sh"); r=$?
 check "旧的 listen-inbox.sh 只说明已改为按需唤醒，不登记、不读队列" '[ $r = 0 ] && printf "%s" "$out" | grep -q "按需唤醒" && [ ! -f "$TMP/run/inbox.pid" ]'

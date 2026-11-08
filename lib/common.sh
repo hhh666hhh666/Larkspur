@@ -124,6 +124,13 @@ hub_reader_state() {
   fi
 }
 hub_reader_ok() { [ "$(hub_reader_state)" != stopped ]; }
+hub_process() {   # <总控的桌面端会话 ID> → 输出它正在运行的 Claude 进程 pid，没有时返回 1
+  local p
+  for p in $(pgrep -u "$(id -u)" -x "${LARKSPUR_CLAUDE_COMM:-claude}" 2>/dev/null); do   # 测试里换成假进程名
+    tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qx "CLAUDE_CODE_HOST_SESSION_ID=$1" && { echo "$p"; return 0; }
+  done
+  return 1
+}
 claude_ancestor() {   # 运行本脚本的 Claude Code 进程（钩子的祖先），找不到时输出父进程
   local p="$PPID" n=0 a0 a1
   while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$n" -lt 30 ]; do

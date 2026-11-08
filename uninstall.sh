@@ -39,7 +39,7 @@ if command -v systemctl >/dev/null; then
   rm -f "$HOME/.config/systemd/user/larkspur.service"; systemctl --user daemon-reload 2>/dev/null || true
 fi
 [ -f "$DEST/run/daemon.json" ] && kill "$(jq -r '.pid // empty' "$DEST/run/daemon.json" 2>/dev/null)" 2>/dev/null || true
-rm -f "$DEST/larkspurd.py" "$DEST/larkspurctl.sh" "$DEST/listen-inbox.sh" "$DEST/listen-wait.sh" "$HOME/.local/share/applications/larkspur.desktop" ${desk:+"$desk/Larkspur.desktop"}
+rm -f "$DEST/larkspurd.py" "$DEST/larkspurctl.sh" "$DEST/listen-inbox.sh" "$DEST/listen-wait.sh" "$DEST/hub-revive.sh" "$HOME/.local/share/applications/larkspur.desktop" ${desk:+"$desk/Larkspur.desktop"}
 rm -rf "$DEST/web"
 say "已移除常驻服务"
 rm -rf "$DEST/hooks" "$DEST/run"

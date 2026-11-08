@@ -182,9 +182,11 @@ function renderStatus(d) {
   const n = [];
   if (D.port_note) n.push(`<div class="warn">${esc(D.port_note)}。之前收藏的地址已失效，以后从桌面的「Larkspur」图标打开即可。</div>`);
   if (D.hub_chat && (D.hub_state || (D.hub_reader ? "waiting" : "stopped")) === "stopped")
-    n.push((d.desktop || "stopped") === "running"
-      ? `<div class="bad">总控会话已停止接收飞书事件，消息会排在队列里。在 Claude 桌面端的总控会话里随便发一句话，它就会恢复。</div>`
-      : `<div class="bad">Claude 桌面端没在运行，飞书消息排在队列里。点上面的「启动桌面端」，总控会自动恢复。</div>`);
+    n.push((d.desktop || "stopped") !== "running"
+      ? `<div class="bad">Claude 桌面端没在运行，飞书消息排在队列里。点上面的「启动桌面端」，总控会自动恢复。</div>`
+      : d.hubproc
+      ? `<div class="bad">总控会话开着，却没在等飞书事件，消息会排在队列里。在 Claude 桌面端的总控会话里随便发一句话，它就会恢复。</div>`
+      : `<div class="warn">总控会话没在运行。飞书一来消息，Larkspur 就会自动打开它把它拉起来（桌面端窗口会切到总控会话），不用手动处理。</div>`);
   $("notices").innerHTML = n.join("");
 }
 

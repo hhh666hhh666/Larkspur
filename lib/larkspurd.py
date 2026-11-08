@@ -5,6 +5,7 @@
   1. 飞书监听：有活动的总控记录时，运行 listen.sh <总控私聊> --hub（私聊消息、卡片、菜单、群消息转发），
      到时（29 分钟）或意外退出后自动重启；输出的每一行事件追加到 run/hub-queue，总控会话的钩子
      在后台运行 listen-wait.sh 读取，有事件才唤醒总控。桌面端或总控会话停着时事件不会丢，排在队列里等总控回来。
+     总控停着而队列里有事件时，用 hub-revive.sh 打开桌面端里的总控会话把它拉起来（桌面端在运行时才做）。
   2. 每分钟网络检测、刷新飞书控制台、跑 IP 守卫（netwatch.sh）。
   3. 本地网页控制台：只监听 127.0.0.1，端口第一次启动时在 20000～60999 里随机挑一个并记进 config.sh
      （LARKSPUR_WEB_PORT），之后固定不变；被占用时重新随机挑。
@@ -124,6 +125,22 @@ def append_queue(line):
         fcntl.flock(lk, fcntl.LOCK_EX)
         with open(QUEUE, "a") as q:
             q.write(line if line.endswith("\n") else line + "\n")
+    NEW_EVENT.set()
+
+
+NEW_EVENT = threading.Event()
+
+
+def revive_loop():
+    """总控停着（例如桌面端重启后总控会话没被打开）而队列里有事件时，用 hub-revive.sh 把总控会话拉起来。
+    有新事件时马上试，之后只要还有事件排着就每分钟再看一次（脚本自己限制频率、检查桌面端是否在运行）。"""
+    while not STOP.is_set():
+        NEW_EVENT.wait(60)
+        NEW_EVENT.clear()
+        if STOP.is_set():
+            break
+        if queue_pending() > 0:
+            bash(os.path.join(H, "hub-revive.sh"), "event", timeout=30)
 
 
 class Child:
@@ -424,6 +441,7 @@ def main():
         (f" wanted={SERVER_INFO.get('wanted_port')}" if SERVER_INFO.get("note") else ""))
     threading.Thread(target=listener_loop, daemon=True).start()
     threading.Thread(target=netwatch_loop, daemon=True).start()
+    threading.Thread(target=revive_loop, daemon=True).start()
     if HTTPD:
         threading.Thread(target=HTTPD.serve_forever, daemon=True).start()
     while not STOP.is_set():

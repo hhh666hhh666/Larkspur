@@ -10,6 +10,9 @@ chmod +x "$TMP"/*.sh "$ROOT/tests/fake-lark.sh"
 export LARKSPUR_HOME="$TMP" LARKSPUR_LARK_CLI="$ROOT/tests/fake-lark.sh" LARKSPUR_OPEN_ID=ou_test LARKSPUR_NO_SYSTEMD=1 \
        LARKSPUR_INBOX="$TMP/inbox" LARKSPUR_IMAGE_WAIT=1 FAKE_LARK_MODE=router FAKE_LARK_CALLS="$TMP/calls" LARKSPUR_HOLD_POLL=1
 printf 'LARKSPUR_WEB_PORT="0"\nLARKSPUR_NET_REFRESH="0"\n' > "$TMP/config.sh"
+# 服务会尝试拉起停着的总控：换成假的桌面端进程名和假的链接打开程序，绝不碰真的桌面端
+mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho "$*" >> "%s/opened"\n' "$TMP" > "$TMP/bin/opener"; chmod +x "$TMP/bin/opener"
+export LARKSPUR_DESKTOP_COMM=fakedesk LARKSPUR_OPENER="$TMP/bin/opener"
 . "$TMP/common.sh"
 cleanup() { "$TMP/larkspurctl.sh" stop >/dev/null 2>&1; pkill -f "$TMP/" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
@@ -26,6 +29,8 @@ check "larkspurctl start 启动服务并报告网页地址" 'daemon_alive && pri
 out2=$(python3 "$TMP/larkspurd.py")
 check "同时只运行一个：再启动一次直接说已在运行" 'printf "%s" "$out2" | grep -q "已在运行"'
 waitfor 'grep -q "只发了图片" "$TMP/run/hub-queue" 2>/dev/null'
+waitfor 'grep -q "hub-revive-skipped reason=desktop-not-running" "$TMP/larkspur.log"'
+check "总控停着而队列里有事件时，服务尝试拉起总控（桌面端没开就不做，不会把它启动起来）" 'grep -q "hub-revive-skipped reason=desktop-not-running" "$TMP/larkspur.log" && [ ! -f "$TMP/opened" ]'
 check "飞书事件写进给总控的队列（私聊消息、卡片提交、群消息转发）" 'grep -q "^飞书消息（用户，text）: 私聊里的话" "$TMP/run/hub-queue" && grep -q "^飞书卡片提交: " "$TMP/run/hub-queue" && [ "$(grep -c "^飞书转发: " "$TMP/run/hub-queue")" = 3 ]'
 in=$(LARKSPUR_WAIT_SECONDS=3 bash "$TMP/listen-wait.sh" h local_h 2>&1 >/dev/null); r=$?
 check "总控按需唤醒：以退出码 2 原样交出全部事件后清空队列" '[ $r = 2 ] && [ "$(printf "%s\n" "$in" | grep -c "^飞书转发: ")" = 3 ] && [ ! -s "$TMP/run/hub-queue" ]'
