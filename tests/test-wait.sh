@@ -28,6 +28,11 @@ check "有事件：以退出码 2 一次交出全部事件" '[ $r = 2 ] && print
 check "交出后队列清空，不留 hub-taken 文件" '[ ! -s "$Q" ] && ! ls "$TMP/run"/hub-taken.* >/dev/null 2>&1'
 check "交出后总控处理期间仍算在接收（不会被普通会话误报停了）" '[ ! -f "$TMP/run/inbox.pid" ] && hub_reader_ok'
 check "交出超过宽限时间还没回来就算停了" '! LARKSPUR_HANDOFF_GRACE=0 hub_reader_ok'
+check "交出时记下了总控的 Claude 进程，状态为处理中" '[ "$(hub_reader_state)" = busy ] && [ "$(wc -w < "$TMP/run/inbox.handoff")" = 2 ]'
+dead=$(bash -c 'echo $$'); echo "$(date +%s) $dead" > "$TMP/run/inbox.handoff"
+check "总控的 Claude 进程没了（桌面端关了）就算停了，不用等宽限时间" '[ "$(hub_reader_state)" = stopped ]'
+export LARKSPUR_DESKTOP_COMM=no-such-desktop
+check "飞书卡片：停了且桌面端没开时提示启动桌面端" 'bash "$TMP/console.sh" render status | grep -q "已停止.*启动后总控会自动恢复"'
 
 start=$(date +%s)
 err=$(LARKSPUR_WAIT_SECONDS=2 timeout 10 bash "$W" h local_h 2>&1 >/dev/null); r=$?
@@ -35,7 +40,8 @@ check "没有事件时一直等着（不调用模型），到期才唤醒一次�
 
 bash "$W" h local_h 2> "$TMP/a.err" & A=$!
 waitfor '[ "$(cat "$TMP/run/inbox.pid" 2>/dev/null)" = "$A" ]'
-check "等待进程登记为总控的事件读取" 'listener_alive inbox && hub_reader_ok'
+check "等待进程登记为总控的事件读取，状态为等待中" 'listener_alive inbox && [ "$(hub_reader_state)" = waiting ]'
+check "飞书卡片：总控显示等待中" 'bash "$TMP/console.sh" render status | grep -q "等待中（有消息才唤醒）"'
 bash "$W" h local_h 2> "$TMP/b.err" & B=$!
 waitfor '! kill -0 "$A" 2>/dev/null'; wait "$A"; ra=$?
 check "新的等待进程顶替旧的，旧的不唤醒总控" '[ "$ra" != 2 ] && [ "$(cat "$TMP/run/inbox.pid")" = "$B" ] && ! grep -q "飞书事件" "$TMP/a.err"'

@@ -45,7 +45,7 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
   now=$(date +%s)
   hc=$(hub_chat || true)
   # 飞书监听由常驻服务 larkspurd 负责，总控会话只读它写的事件队列
-  local dalive=false reader=false pending=0 web=""
+  local dalive=false reader=false rstate=stopped pending=0 web=""
   if daemon_alive; then
     dalive=true
     started=$(jq -r '.started // empty' "$RUN_DIR/daemon.json" 2>/dev/null); started=${started:-$now}
@@ -54,7 +54,7 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
     elif listener_alive "$hc.msg"; then up="运行中（已运行 $(( (now - started) / 60 )) 分钟）"
     else up="运行中，飞书监听正在重连"; fi
   else up="<font color=\"red\">没在运行</font>（在电脑桌面点「Larkspur」打开）"; fi
-  hub_reader_ok && reader=true
+  rstate=$(hub_reader_state); [ "$rstate" != stopped ] && reader=true
   local dstate gatelast; dstate=$(desktop_state); gatelast=$(desktop_gate_last)
   pending=$(grep -c '' "$RUN_DIR/hub-queue" 2>/dev/null); pending=${pending:-0}
 
@@ -101,11 +101,11 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
   fi
 
   [ -n "$today" ] || today='{}'; [ -n "$events" ] || events='[]'; [ -n "$net" ] || net='{}'
-  jq -cn --argjson net "$net" --arg now "$now" --argjson dalive "$dalive" --argjson reader "$reader" --arg dstate "$dstate" --arg gatelast "$gatelast" --arg pending "$pending" --arg web "$web" --arg netint "$NET_REFRESH" --arg expip "$EXPECTED_IP" --arg guard "$IP_GUARD_CMD" --arg guardon "$IP_GUARD" --arg gateon "$DESKTOP_GATE" --arg mode "$(router_active && echo router || echo none)" --arg up "$up" --argjson s "$sessions" \
+  jq -cn --argjson net "$net" --arg now "$now" --argjson dalive "$dalive" --argjson reader "$reader" --arg rstate "$rstate" --arg dstate "$dstate" --arg gatelast "$gatelast" --arg pending "$pending" --arg web "$web" --arg netint "$NET_REFRESH" --arg expip "$EXPECTED_IP" --arg guard "$IP_GUARD_CMD" --arg guardon "$IP_GUARD" --arg gateon "$DESKTOP_GATE" --arg mode "$(router_active && echo router || echo none)" --arg up "$up" --argjson s "$sessions" \
      --argjson today "$today" --arg mem "$(( mem / 1024 ))" --argjson ev "$events" \
      --arg ack "$ACK_EMOJI" --arg wait "$IMAGE_WAIT" --arg bf "$BACKFILL_HOURS" --arg sm "$SPAWN_MODE" \
      --arg alerts "$ALERTS" --arg prefix "$GROUP_PREFIX" --arg root "$PROJECTS_ROOT" --arg time "$(TZ="$DISPLAY_TZ" date +%H:%M:%S)" \
-     '{mode:$mode, up:$up, sessions:$s, today:$today, mem:$mem, events:$ev, time:$time, net:$net, now:($now|tonumber), daemon:$dalive, reader:$reader, desktop:$dstate,
+     '{mode:$mode, up:$up, sessions:$s, today:$today, mem:$mem, events:$ev, time:$time, net:$net, now:($now|tonumber), daemon:$dalive, reader:$reader, rstate:$rstate, desktop:$dstate,
        gatelast:(if $gatelast == "" then null else ($gatelast | capture("^(?<t>\\S+ \\S+) desktop-gate (?<r>\\S+)(?<rest>.*)$")) end), pending:($pending|tonumber? // 0), web:$web, netint:($netint|tonumber? // 0), expip:$expip, guard:$guard, guardon:$guardon, gateon:$gateon,
        opt:{ack:$ack, wait:$wait, backfill:$bf, spawn:$sm, alerts:$alerts, prefix:$prefix, root:$root}}'
 }
@@ -165,7 +165,7 @@ render() {   # <page> [提示] → 卡片 JSON
             md("**项目根目录**　新建会话卡片里列出的目录，改完按回车保存"),
             setinput("root"; $d.opt.root; "绝对路径"),
           md("<font color=\"grey\">接收方式：只由总控统一监听并转发，不允许各会话自己监听。没有总控时各会话收不到飞书消息，在一个常开的会话里执行 /feishu hub 即可。</font>") ]) as $opts
-    | ([ md("**接收方式**　\(if $d.mode == "router" then "总控统一转发" else "<font color=\"red\">没有总控，各会话收不到消息</font>" end)\n**Larkspur 服务**　\($d.up)\n**总控会话**　\(if $d.reader then "在读取" else "<font color=\"red\">没在读取</font>" end)\(if $d.pending > 0 then "　<font color=\"grey\">\($d.pending) 条事件排队中</font>" else "" end)\n**Claude 桌面端**　\(if $d.desktop == "running" then "运行中" elif $d.desktop == "starting" then "正在启动（检查出口 IP 中）" else "<font color=\"grey\">没在运行（只能手动启动）</font>" end)\(if $d.desktop != "running" and ($d.gatelast.r // "") == "refused" then "\n<font color=\"red\">上次启动被闸门拦下（\($d.gatelast.t[11:16])）：出口 IP 不符</font>" else "" end)\(if $d.web != "" then "\n**本地控制台**　" + $d.web else "" end)\n**同步中的会话**　\([$d.sessions[] | select(.active and (.hub | not))] | length) 个\n**今天**　收到 \($d.today.inbound // 0) 条 · 转发 \($d.today.route // 0) 条 · 发回 \($d.today.outbound // 0) 条\(if ($d.today["outbound-failed"] // 0) > 0 then " · <font color=\"red\">发回失败 \($d.today["outbound-failed"]) 次</font>" else "" end)\n**常驻内存**　\($d.mem) MB"),
+    | ([ md("**接收方式**　\(if $d.mode == "router" then "总控统一转发" else "<font color=\"red\">没有总控，各会话收不到消息</font>" end)\n**Larkspur 服务**　\($d.up)\n**总控会话**　\(if $d.rstate == "waiting" then "等待中（有消息才唤醒）" elif $d.rstate == "busy" then "处理中" else "<font color=\"red\">已停止</font>" end)\(if $d.pending > 0 then "　<font color=\"grey\">\($d.pending) 条事件排队中</font>" else "" end)\(if $d.rstate == "stopped" and $d.mode == "router" then "\n<font color=\"grey\">\(if $d.desktop == "running" then "在桌面端的总控会话里随便发一句话即可恢复" else "Claude 桌面端没在运行，启动后总控会自动恢复" end)，期间的消息排在队列里</font>" else "" end)\n**Claude 桌面端**　\(if $d.desktop == "running" then "运行中" elif $d.desktop == "starting" then "正在启动（检查出口 IP 中）" else "<font color=\"grey\">没在运行（只能手动启动）</font>" end)\(if $d.desktop != "running" and ($d.gatelast.r // "") == "refused" then "\n<font color=\"red\">上次启动被闸门拦下（\($d.gatelast.t[11:16])）：出口 IP 不符</font>" else "" end)\(if $d.web != "" then "\n**本地控制台**　" + $d.web else "" end)\n**同步中的会话**　\([$d.sessions[] | select(.active and (.hub | not))] | length) 个\n**今天**　收到 \($d.today.inbound // 0) 条 · 转发 \($d.today.route // 0) 条 · 发回 \($d.today.outbound // 0) 条\(if ($d.today["outbound-failed"] // 0) > 0 then " · <font color=\"red\">发回失败 \($d.today["outbound-failed"]) 次</font>" else "" end)\n**常驻内存**　\($d.mem) MB"),
           (if $d.desktop == "stopped" then row([btn("启动桌面端"; {op:"desktop"}; "primary")
              + {confirm:{title:pt("启动 Claude 桌面端？"), text:pt("会先检查三个出口 IP，相符才启动。")}}]) else empty end),
           md("**最近事件**\n" + (if ($d.events | length) == 0 then "<font color=\"grey\">暂无</font>" else

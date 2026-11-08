@@ -29,7 +29,7 @@ take() {   # 把队列、以及死掉的旧等待进程没交出去的事件挪�
   } 9>>"$Q.lock"
   [ -s "$MINE" ]
 }
-handoff() { date +%s > "$RUN_DIR/inbox.handoff"; }
+handoff() { echo "$(date +%s) $claude" > "$RUN_DIR/inbox.handoff"; }   # 记下总控的 Claude 进程，见 hub_reader_state
 
 still_hub || exit 0
 claude="${LARKSPUR_WAIT_PARENT:-$(claude_ancestor)}"   # 测试时可指定

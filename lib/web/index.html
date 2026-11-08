@@ -158,7 +158,8 @@ function renderStatus(d) {
   let h = "";
   h += row("Larkspur 服务", `${tag("运行中", "ok")} <span class="desc">已运行 ${dur(D.uptime || 0)}</span>`);
   h += row("飞书监听", !D.hub_chat ? tag("没有总控，不收消息", "warn") : D.listener ? tag("在线", "ok") : tag("正在重连", "warn"));
-  h += row("总控会话", (D.hub_reader ? tag("在读取", "ok") : tag("没在读取", "bad")) +
+  const hs = D.hub_state || (D.hub_reader ? "waiting" : "stopped");
+  h += row("总控会话", (hs === "waiting" ? tag("等待中", "ok") + ` <span class="desc">有消息才唤醒</span>` : hs === "busy" ? tag("处理中", "ok") : tag("已停止", "bad")) +
            (D.queue_pending > 0 ? ` <span class="desc">${D.queue_pending} 条事件排队中</span>` : ""));
   const dsk = d.desktop || "stopped", gl = d.gatelast || {};
   h += row("Claude 桌面端", dsk === "running" ? tag("运行中", "ok")
@@ -180,7 +181,10 @@ function renderStatus(d) {
 
   const n = [];
   if (D.port_note) n.push(`<div class="warn">${esc(D.port_note)}。之前收藏的地址已失效，以后从桌面的「Larkspur」图标打开即可。</div>`);
-  if (D.hub_chat && !D.hub_reader) n.push(`<div class="bad">总控会话没在读取飞书事件，消息会排在队列里。打开 Claude 桌面端里的总控会话，随便发一句话，它就会恢复。</div>`);
+  if (D.hub_chat && (D.hub_state || (D.hub_reader ? "waiting" : "stopped")) === "stopped")
+    n.push((d.desktop || "stopped") === "running"
+      ? `<div class="bad">总控会话已停止接收飞书事件，消息会排在队列里。在 Claude 桌面端的总控会话里随便发一句话，它就会恢复。</div>`
+      : `<div class="bad">Claude 桌面端没在运行，飞书消息排在队列里。点上面的「启动桌面端」，总控会自动恢复。</div>`);
   $("notices").innerHTML = n.join("");
 }
 

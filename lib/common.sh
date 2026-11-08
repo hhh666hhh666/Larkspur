@@ -108,13 +108,22 @@ claim_listener() {   # 顶替同名的旧实例（连同它的 lark-cli 子进�
   trap "release_listener '$1'" EXIT
 }
 release_listener() { [ "$(cat "$RUN_DIR/$1.pid" 2>/dev/null)" = "$$" ] && rm -f "$RUN_DIR/$1.pid"; }
-# 总控是否在接收事件：后台等待进程（listen-wait.sh）在跑，或者它刚把事件交给总控、总控正在处理
-# （处理期间没有等待进程，回合结束时 Stop 钩子再起一个；交出去 10 分钟还没回来才算停了）
-hub_reader_ok() {
-  listener_alive inbox && return 0
-  local t; t=$(cat "$RUN_DIR/inbox.handoff" 2>/dev/null) || return 1
-  [ -n "$t" ] && [ $(( $(date +%s) - t )) -lt "${LARKSPUR_HANDOFF_GRACE:-600}" ]
+# 总控接收事件的状态：
+#   waiting  后台等待进程（listen-wait.sh）在跑，有事件就唤醒总控
+#   busy     刚把事件交给总控、总控正在处理（这期间没有等待进程，回合结束时 Stop 钩子再起一个）：
+#            交出时记下了总控的 Claude 进程，它还在、且没超过 LARKSPUR_HANDOFF_GRACE（默认 1 小时）就算在处理
+#   stopped  都不是：总控会话没起来、桌面端没开，或者等待进程没了
+hub_reader_state() {
+  listener_alive inbox && { echo waiting; return; }
+  local t="" p=""
+  { read -r t p < "$RUN_DIR/inbox.handoff"; } 2>/dev/null
+  if [ -n "$t" ] && [ $(( $(date +%s) - t )) -lt "${LARKSPUR_HANDOFF_GRACE:-3600}" ] && { [ -z "$p" ] || kill -0 "$p" 2>/dev/null; }; then
+    echo busy
+  else
+    echo stopped
+  fi
 }
+hub_reader_ok() { [ "$(hub_reader_state)" != stopped ]; }
 claude_ancestor() {   # 运行本脚本的 Claude Code 进程（钩子的祖先），找不到时输出父进程
   local p="$PPID" n=0 a0 a1
   while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$n" -lt 30 ]; do

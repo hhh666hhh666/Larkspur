@@ -88,15 +88,24 @@ def hub():
     return None, None
 
 
-def hub_reader_ok():
-    """与 common.sh 的 hub_reader_ok 一致：等待进程在跑，或刚把事件交给总控（10 分钟内）。"""
+def hub_reader_state():
+    """与 common.sh 的 hub_reader_state 一致：waiting（等待进程在跑）、busy（刚交出事件、总控的 Claude 进程还在）、stopped。"""
     if pid_alive("inbox"):
-        return True
+        return "waiting"
     try:
-        t = int(open(os.path.join(RUN, "inbox.handoff")).read().strip())
-    except (OSError, ValueError):
-        return False
-    return time.time() - t < int(os.environ.get("LARKSPUR_HANDOFF_GRACE", "600"))
+        parts = open(os.path.join(RUN, "inbox.handoff")).read().split()
+        t = int(parts[0])
+        pid = int(parts[1]) if len(parts) > 1 else None
+    except (OSError, ValueError, IndexError):
+        return "stopped"
+    if time.time() - t >= int(os.environ.get("LARKSPUR_HANDOFF_GRACE", "3600")):
+        return "stopped"
+    if pid is not None:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return "stopped"
+    return "busy"
 
 
 def pid_alive(name):
@@ -212,7 +221,7 @@ def state():
         "port_note": SERVER_INFO.get("note", ""),
         "hub_chat": chat, "hub_desktop": desk,
         "listener": bool(lc and lc.running()), "listener_restarts": LISTENER["restarts"],
-        "hub_reader": hub_reader_ok(),
+        "hub_reader": hub_reader_state() != "stopped", "hub_state": hub_reader_state(),
         "queue_pending": queue_pending(),
         "netwatch": NETWATCH.running(),
     }
