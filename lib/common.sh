@@ -214,6 +214,16 @@ desktop_state() {   # running（在运行）| starting（启动闸门正在检�
   done
   echo "$st"
 }
+graphical_session_pid() {   # 当前用户图形会话的会话管理进程：它的环境就是从桌面图标打开程序时的环境（含输入法设置）
+  local n p
+  # pgrep -x 比的是进程名，最长 15 个字符，长名字要写截断后的样子
+  for n in ${LARKSPUR_SESSION_COMM:-xfce4-session gnome-session-b ksmserver plasma_session mate-session cinnamon-sessio lxqt-session lxsession budgie-desktop xfdesktop gnome-shell}; do
+    for p in $(pgrep -u "$(id -u)" -x "$n" 2>/dev/null); do
+      tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qE '^(DISPLAY|WAYLAND_DISPLAY)=' && { echo "$p"; return 0; }
+    done
+  done
+  return 1
+}
 desktop_gate_last() {   # 启动闸门最近一次的结果（日志原文，没有时为空）
   grep -E ' desktop-gate (pass|refused|off)' "$LOG" 2>/dev/null | tail -n 1
 }

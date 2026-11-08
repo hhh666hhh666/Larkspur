@@ -66,8 +66,11 @@ waitfor 'listener_alive oc_h.msg'
 
 # 桌面端只能手动启动：按钮经过启动器启动它；已在运行时不重复启动；关掉 Larkspur 不连带关掉它
 mkdir -p "$TMP/bin"; cp "$(command -v bash)" "$TMP/bin/fakedesk"   # 假桌面端：进程名为 fakedesk（sleep 可能是 coreutils 多合一程序，改名后不能运行）
-printf '#!/usr/bin/env bash\necho "$*" >> "%s/desk-launched"\necho "daemon-env:${LARKSPUR_DAEMON:-none}" >> "%s/desk-launched"\nexec "%s/bin/fakedesk" -c "sleep 120; true"\n' "$TMP" "$TMP" "$TMP" > "$TMP/bin/launcher"; chmod +x "$TMP/bin/launcher"
-export LARKSPUR_DESKTOP_COMM=fakedesk LARKSPUR_DESKTOP_LAUNCHER="$TMP/bin/launcher"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/desk-launched"\necho "daemon-env:${LARKSPUR_DAEMON:-none}" >> "%s/desk-launched"\necho "im:${GTK_IM_MODULE:-none}" >> "%s/desk-launched"\nexec "%s/bin/fakedesk" -c "sleep 120; true"\n' "$TMP" "$TMP" "$TMP" "$TMP" > "$TMP/bin/launcher"; chmod +x "$TMP/bin/launcher"
+# 假的图形会话进程：带着输入法设置，桌面端应该用它的环境启动（服务自己的环境里没有）
+cp "$(command -v bash)" "$TMP/bin/fakesession"
+env -i HOME="$HOME" PATH="$PATH" DISPLAY=:99 GTK_IM_MODULE=fcitx "$TMP/bin/fakesession" -c "sleep 300; true" </dev/null >/dev/null 2>&1 & FS=$!
+export LARKSPUR_DESKTOP_COMM=fakedesk LARKSPUR_DESKTOP_LAUNCHER="$TMP/bin/launcher" LARKSPUR_SESSION_COMM=fakesession
 "$TMP/larkspurctl.sh" restart >/dev/null; P=$(jq -r .port "$TMP/run/daemon.json"); U="http://localhost:$P"
 check "桌面端没在运行时状态显示没在运行，飞书卡片上有「启动桌面端」按钮" '[ "$(curl -s "$U/api/state" | jq -r .desktop)" = stopped ] && bash "$TMP/console.sh" render status | grep -q "启动桌面端"'
 r=$(post /api/desktop/start '{}')
@@ -85,7 +88,9 @@ check "桌面端退出后不会被自动拉起" '[ "$(desktop_state)" = stopped 
 : > "$TMP/calls"; bash "$TMP/console.sh" action '{"lk":"c","op":"desktop"}' >/dev/null 2>&1
 waitfor '[ "$(desktop_state)" = running ]'
 check "飞书卡片：点「启动桌面端」后桌面端启动，卡片提示正在启动" '[ "$(desktop_state)" = running ] && grep -q "desktop-start source=feishu" "$TMP/larkspur.log" && grep -qE "api PATCH|messages-send" "$TMP/calls"'
+check "桌面端用图形会话的环境启动（带输入法设置），不用服务的环境" '[ "$(grep -c "^im:fcitx$" "$TMP/desk-launched")" = 2 ] && ! grep -q "^im:none$" "$TMP/desk-launched"'
 check "从飞书卡片启动的桌面端不继承服务监听进程的 LARKSPUR_DAEMON" '! grep -q "daemon-env:1" "$TMP/desk-launched" && grep -q "daemon-env:none" "$TMP/desk-launched"'
+kill "$FS" 2>/dev/null   # 假的图形会话用完了，免得算进下面的「关闭后不留子进程」
 pkill -x fakedesk
 lp=$(cat "$TMP/run/oc_h.msg.pid")
 out=$(timeout 5 bash "$TMP/listen.sh" oc_h --hub)
