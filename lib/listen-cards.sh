@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 用法：listen-cards.sh <chat_id>
+# 用法：listen-cards.sh <chat_id> [总控监听的 pid]（给了 pid 时，它退出后这里也跟着退出）
 # 总控用：监听这个私聊里、你本人在卡片上的操作，只放行你本人。两类卡片：
 #   1. 「新建会话」表单卡片：提交时输出下面这行事件，交给总控；
 #   2. 控制台卡片（按钮带 {"lk":"c"}）：交给 console.sh 直接处理，不唤醒 Claude；
@@ -14,14 +14,15 @@ set -u
 . "${LARKSPUR_HOME:-$HOME/.claude/larkspur}/common.sh"
 require_open_id
 
-chat="${1:?缺少 chat_id}"
+chat="${1:?缺少 chat_id}"; parent="${2:-}"
 claim_listener "$chat.cards"
 
-"$LARK" event consume card.action.trigger --as bot --timeout 29m \
+reap_orphan_consumers card.action.trigger
+"$LARK" event consume card.action.trigger --as bot \
   --jq "select(.operator_id == \"$OPEN_ID\" and ((.chat_id // \"\") == \"$chat\" or (.chat_id // \"\") == \"\"))
         | {tag: (.action_tag // \"\"), value: (.action_value // \"\"), form: (.form_value // \"\"),
            input: ((.option // \"\") + (.input_value // \"\")), token, message_id}" \
-  < <(hold_stdin $$) 2>&1 |
+  < <(hold_stdin $$ $((29 * 60)) $parent) 2>&1 |
 {
 declare -A seen=()
 while IFS= read -r line; do

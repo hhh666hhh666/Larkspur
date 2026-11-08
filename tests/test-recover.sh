@@ -8,7 +8,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
 cp "$ROOT"/lib/*.sh "$TMP/"; mkdir -p "$TMP/hooks"; cp "$ROOT"/hooks/*.sh "$TMP/hooks/"
-export LARKSPUR_HOME="$TMP" LARKSPUR_LARK_CLI="$ROOT/tests/fake-lark.sh" LARKSPUR_OPEN_ID="ou_test" \
+export LARKSPUR_HOME="$TMP" LARKSPUR_LARK_CLI="$ROOT/tests/fake-lark.sh" LARKSPUR_OPEN_ID="ou_test" LARKSPUR_NET_REFRESH=0 LARKSPUR_HOLD_POLL=1 \
        LARKSPUR_INBOX="$TMP/inbox" LARKSPUR_IMAGE_WAIT=1 FAKE_LARK_MODE=recover
 chmod +x "$ROOT/tests/fake-lark.sh"
 . "$TMP/common.sh"
@@ -67,6 +67,23 @@ check "卡片正常到时退出不打扰" '! grep -q "状态" "$TMP/h.out"'
 h_all=$(tree "$H" | tr '\n' ' ')
 kill_tree "$H"; sleep 0.5
 check "总控监听被杀后不留孤儿进程" 'for k in $h_all; do kill -0 $k 2>/dev/null && exit 1; done; true'
+# 桌面端重启：只有监听脚本本身被杀（kill -9），lark-cli 不能变成孤儿继续占着事件
+bash "$TMP/listen.sh" oc_k --hub > "$TMP/k.out" 2>&1 & K=$!
+waitfor "$TMP/k.out" "实时消息"; sleep 1
+k_lark=$(pgrep -f "fake-lark.sh event consume" | while read -r p; do tree "$K" | grep -qx "$p" && echo "$p"; done | tr '\n' ' ')
+kill -9 "$K"; sleep 4
+check "监听脚本被强杀后，它的 lark-cli 几秒内自己退出（不成孤儿）" '[ -n "$k_lark" ] && ( for k in $k_lark; do kill -0 $k 2>/dev/null && exit 1; done; true )'
+pkill -f "$TMP/" 2>/dev/null; sleep 0.3
+# 兜底：已经存在的孤儿 lark-cli（就是 $LARK、父进程不是监听脚本、带本人 open_id）在新监听启动时被清掉
+orphan() { ( "$ROOT/tests/fake-lark.sh" event consume application.bot.menu_v6 --as bot --timeout 29m \
+             --jq "select(.operator_id == \"$1\")" </dev/null >/dev/null 2>&1 & echo $! > "$TMP/$1.pid" ); }
+orphan ou_test; orphan ou_other
+( bash -c 'sleep 30 # event consume application.bot.menu_v6 ou_test' & echo $! > "$TMP/decoy.pid" )
+sleep 0.3; op=$(cat "$TMP/ou_test.pid"); xp=$(cat "$TMP/ou_other.pid"); dp=$(cat "$TMP/decoy.pid")
+timeout 3 bash "$TMP/listen-menu.sh" >/dev/null 2>&1
+check "新监听启动时清掉上一轮的孤儿 lark-cli" '! kill -0 "$op" 2>/dev/null && grep -q "orphan-reaped key=application.bot.menu_v6" "$TMP/larkspur.log"'
+check "不动别人的 lark-cli，也不动只是命令行里提到它的进程" 'kill -0 "$xp" 2>/dev/null && kill -0 "$dp" 2>/dev/null'
+kill "$xp" "$dp" 2>/dev/null
 # ---- 会话换了新 ID：按桌面端会话 ID 找回记录并迁移 ----
 jq -n '{session_id:"old1", desktop_id:"local_d1", chat_id:"oc_m", active:true}' > "$TMP/sessions/old1.json"
 f=$(CLAUDE_CODE_SESSION_ID=new1 CLAUDE_CODE_HOST_SESSION_ID=local_d1 bash -c '. "$LARKSPUR_HOME/common.sh"; resolve_state new1')

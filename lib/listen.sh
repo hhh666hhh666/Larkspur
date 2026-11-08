@@ -7,8 +7,8 @@
 # 总控：
 #   1. 自己私聊里的消息照常输出；
 #   2. 后台跑 listen-cards.sh，卡片提交也从这里输出；
-#   3. 后台跑 listen-menu.sh，响应机器人菜单里的「控制台」按钮；私聊里发「控制台」「状态」「会话」「设置」
-#      也由脚本直接打开控制台卡片，不唤醒 Claude；
+#   3. 后台跑 listen-menu.sh，响应机器人菜单里的「控制台」按钮；私聊里发「控制台」「状态」「会话」「设置」「网络」
+#      也由脚本直接打开控制台卡片，不唤醒 Claude；后台跑 netwatch.sh，每分钟重做网络检测并刷新控制台；
 #   4. 其他开着同步的会话的群里，用户发的消息输出成一行「飞书转发: {"to","chat","group","message"}」，
 #      （另有 chat 字段）由总控用 send_message 投进对应会话，在桌面端显示为消息气泡。
 #
@@ -41,11 +41,12 @@ for c in $(routed_chats); do
   op=$(cat "$RUN_DIR/$c.msg.pid" 2>/dev/null)
   if listener_pid_ok "$op"; then kill_tree "$op"; rm -f "$RUN_DIR/$c.msg.pid"; fs_log "session-listener-stopped chat=$c pid=$op"; fi
 done
-cards_pid=""; menu_pid=""
+cards_pid=""; menu_pid=""; net_pid=""
 if [ -n "$hub" ]; then
-  "$LARKSPUR_HOME/listen-cards.sh" "$chat" & cards_pid=$!
+  "$LARKSPUR_HOME/listen-cards.sh" "$chat" $$ & cards_pid=$!
   "$LARKSPUR_HOME/listen-menu.sh" $$ & menu_pid=$!
-  trap 'release_listener "$chat.msg"; kill_tree "$cards_pid"; kill_tree "$menu_pid"' EXIT
+  "$LARKSPUR_HOME/netwatch.sh" $$ </dev/null >/dev/null 2>&1 & net_pid=$!
+  trap 'release_listener "$chat.msg"; kill_tree "$cards_pid"; kill_tree "$menu_pid"; kill_tree "$net_pid"' EXIT
 fi
 cfg_m=$(file_mtime "$LARKSPUR_HOME/config.sh")
 reload_cfg() {   # 控制台改了 config.sh 时，不用重启监听就生效
@@ -123,6 +124,7 @@ handle_msg() {  # 处理一条 JSON 消息：{chat_id, message_id, message_type,
       状态)   "$LARKSPUR_HOME/console.sh" show status >/dev/null 2>&1 & return ;;
       会话|会话列表) "$LARKSPUR_HOME/console.sh" show sessions >/dev/null 2>&1 & return ;;
       设置|功能选项) "$LARKSPUR_HOME/console.sh" show options >/dev/null 2>&1 & return ;;
+      网络|网络检测|IP|ip) "$LARKSPUR_HOME/console.sh" show net >/dev/null 2>&1 & return ;;
     esac
   fi
 
@@ -162,9 +164,10 @@ backfill() {    # 补发上一个监听启动以来漏掉的消息（第一次�
 
 filter="select(.sender_id == \"$OPEN_ID\")"
 
-"$LARK" event consume im.message.receive_v1 --as bot --timeout 29m \
+reap_orphan_consumers im.message.receive_v1
+"$LARK" event consume im.message.receive_v1 --as bot \
   --jq "$filter | {chat_id, message_id, message_type, content}" \
-  < <(hold_stdin $$) 2>&1 |
+  < <(hold_stdin $$ $((29 * 60))) 2>&1 |
 while :; do
   if [ "$deadline" -gt 0 ]; then
     remain=$((deadline - SECONDS)); [ "$remain" -lt 1 ] && remain=1

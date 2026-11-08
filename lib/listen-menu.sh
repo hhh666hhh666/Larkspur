@@ -16,9 +16,10 @@ alive() { [ "$(date +%s)" -lt "$end" ] && { [ -z "$parent" ] || kill -0 "$parent
 
 while alive; do
   started=$(date +%s)
-  "$LARK" event consume application.bot.menu_v6 --as bot --timeout "$(( (end - started) / 60 + 1 ))m" \
+  reap_orphan_consumers application.bot.menu_v6
+  "$LARK" event consume application.bot.menu_v6 --as bot \
     --jq "select((.operator_open_id // .operator_id) == \"$OPEN_ID\") | {key: .event_key}" \
-    < <(hold_stdin $$) 2>&1 |
+    < <(hold_stdin $$ $(( end - started )) $parent) 2>&1 |
   while IFS= read -r line; do
     case "$line" in
       \{\"key\"*) key=$(printf '%s' "$line" | jq -r '.key // ""'); fs_log "menu key=$key"

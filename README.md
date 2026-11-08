@@ -49,6 +49,13 @@ Claude Code 会话 ◄──────────────► on.sh：机�
 | `lib/listen-cards.sh` | 总控用：监听卡片表单提交，由 `listen.sh --hub` 在后台拉起 |
 | `lib/say.sh` | 总控用：以机器人身份发一条提醒 |
 | `lib/console.sh` | 控制台卡片：渲染、置顶、原地更新，处理卡片上的点击 |
+| `lib/netcheck.sh` | 检测本机访问 Claude 的出口 IP、信任评分和风险，结果缓存给控制台 |
+| `lib/netwatch.sh` | 总控用：每分钟重做网络检测并刷新控制台，由 `listen.sh --hub` 在后台拉起 |
+| `lib/exit-ips.sh` | 并发查三个出口 IP（国内网站、Cloudflare、Claude 看到的），可判断是否都等于期望 IP |
+| `lib/ipguard.sh` | IP 守卫：出口 IP 不符时提醒并运行守卫命令（会话启动时、每次网络检测刷新后） |
+| `lib/desktop-gate.sh` | 桌面端启动闸门，装为 `~/.local/bin/claude-desktop`：三个出口 IP 都相符才启动桌面端 |
+| `lib/ip-gate-ui.sh` | 「IP 闸门」设置程序（桌面图标），显示三个出口 IP，开关启动闸门和运行中守卫、改期望 IP |
+| `hooks/session-start.sh` | SessionStart 钩子：会话启动时跑 IP 守卫；桌面端拉起总控会话时自动让它启动飞书监听 |
 | `lib/listen-menu.sh` | 总控用：响应机器人菜单「控制台」 |
 | `lib/mode.sh` | 输出当前有没有总控在转发（router / none） |
 | `hooks/notify.sh` | Stop 钩子：只给开启了同步的会话，把最终回复发到对应的群 |
@@ -123,15 +130,16 @@ cd Larkspur
 
 ### 控制台
 
-总控私聊里置顶着一张「Larkspur 控制台」卡片，分三页：
+总控私聊里置顶着一张「Larkspur 控制台」卡片，分四页：
 
 - **状态**：接收方式、总控监听是否在跑、同步中的会话数、今天收到/转发/发回的条数、常驻内存、最近事件。
 - **会话**：每个同步中的会话一行，带「进群」「关闭同步」「归档会话」按钮（后两个会先弹确认）。
+- **网络检测**：前三行依次是中国出口 IPv4、Cloudflare 出口 IP、Claude AI 出口 IP（各带归属地），然后是信任评分、是否 Claude 支持的地区、住宅/机房、ASN 与运营商、VPN/代理/Tor/爬虫/滥用记录、claude.ai/anthropic.com/api.anthropic.com 延迟、Claude 服务状态、DNS 泄露。检测项与 [ip.net.coffee/claude](https://ip.net.coffee/claude/) 相同，数据也来自它（WebRTC 只存在于浏览器，不检测）。总控在跑时每分钟自动重测并刷新整张卡片（`LARKSPUR_NET_REFRESH`），也可以点「重新检测」现测，约 10 秒。
 - **功能选项**：已读回执表情、图片等文字的秒数、断线补发时长、新会话权限模式、异常提醒、群名前缀、项目根目录。保存后立即生效，不用重启监听。
 
-打开方式：点私聊输入框上方的机器人菜单「控制台」，或在私聊里发「控制台」「状态」「会话」「设置」。卡片不在了会重新发一张并置顶。
+打开方式：点私聊输入框上方的机器人菜单「控制台」，或在私聊里发「控制台」「状态」「会话」「网络」「设置」。卡片不在了会重新发一张并置顶。
 
-切页、刷新、关闭同步、改设置、发新建卡片都由脚本直接完成，不唤醒 Claude，不花 token；只有「归档会话」要用到桌面端工具，会交给总控处理。会话开启、关闭或新建时，卡片也会自动刷新。
+切页、刷新、关闭同步、改设置、发新建卡片、网络检测都由脚本直接完成，不唤醒 Claude，不花 token；只有「归档会话」要用到桌面端工具，会交给总控处理。会话开启、关闭或新建时，卡片也会自动刷新。
 
 要用机器人菜单，需要在飞书开放平台：
 
@@ -140,6 +148,15 @@ cd Larkspur
 3. 发布新版本。
 
 不配菜单也能用，在私聊里发「控制台」即可。
+
+### 出口 IP 守卫与自动启动总控
+
+设了 `LARKSPUR_EXPECTED_IP` 后，「出口 IP」指三个：国内网站（ipip.net）、Cloudflare（1.1.1.1）和 Claude（claude.ai）看到的 IP，三个都要等于它。
+
+- **桌面端启动前**（先于一切）：`install.sh` 把闸门装成 `~/.local/bin/claude-desktop`。菜单、面板图标、`claude://` 链接都按 PATH 找 `claude-desktop`，而 `~/.local/bin` 排在最前，所以每次启动都先过闸门：三个 IP 都查到且相符才启动真正的桌面端；否则在 `LARKSPUR_DESKTOP_GATE_WAIT` 秒内重查，期满仍不通过就不启动——桌面端不运行，也就不会联网，同时弹出桌面通知并在飞书私聊里提醒。桌面端已在运行时（点 `claude://` 链接）直接放行。直接运行 `/usr/bin/claude-desktop` 会绕过闸门。
+- **运行中**：每个会话启动时（SessionStart 钩子），以及控制台每次网络检测刷新之后，都跑一次 IP 守卫。有任何一个 IP 查到了且不符，就再现查两次确认，然后在飞书私聊里提醒，并运行 `LARKSPUR_IP_GUARD_CMD`（例如结束所有 Claude 进程的脚本）。查不到 IP（断网）不算不符。
+- **开关**：`install.sh` 会在桌面放一个「IP 闸门」程序（应用菜单里也有）。打开后先现查三个出口 IP，再用勾选框开关「启动闸门」和「运行中守卫」，也能改期望 IP，保存后立即生效。打开守卫或改期望 IP 会让守卫马上动手时，会先弹确认。
+- **自动启动总控**：桌面端启动时会自动拉起之前打开的会话。总控会话被拉起时，SessionStart 钩子发现它的飞书监听没在跑，就唤醒它启动监听；万一总控会话没被拉起，30 秒后由一个开着同步的会话给总控发消息，把它拉起来。
 
 注意：
 
@@ -166,6 +183,12 @@ cd Larkspur
 | `LARKSPUR_SPAWN_PERMISSION_MODE` | `bypassPermissions` | 总控新建的会话导入后切到的权限模式，留空不切换；默认模式是 `auto` 时自动跳过 |
 | `LARKSPUR_ALERTS` | `on` | 发回失败、消息没能转发时提醒你 |
 | `LARKSPUR_ACK_EMOJI` | `Get` | 收到消息时加的表情回复（`Get` 即「了解」），留空不加 |
+| `LARKSPUR_NET_REFRESH` | `60` | 总控在跑时每隔多少秒重做网络检测并刷新控制台卡片，`0` 关闭 |
+| `LARKSPUR_EXPECTED_IP` | 空 | 三个出口 IP 都应是它；留空不检查。设了以后 `install.sh` 会装上桌面端启动闸门 |
+| `LARKSPUR_DESKTOP_GATE_WAIT` | `30` | 桌面端启动前最多等多少秒让 IP 变对，期满仍不符就不启动 |
+| `LARKSPUR_DESKTOP_GATE` / `LARKSPUR_IP_GUARD` | `on` | 启动闸门、运行中守卫的开关，桌面上的「IP 闸门」程序可切换 |
+| `LARKSPUR_IP_GUARD_CMD` | 空 | 运行中发现出口 IP 不符时运行的命令（stdin 收到 `y`）；留空只提醒 |
+| `LARKSPUR_HUB_AUTOSTART` | `on` | 桌面端启动、总控会话被拉起时，自动让它启动飞书监听 |
 | `LARKSPUR_BACKFILL_HOURS` | `12` | 监听恢复时，最多补发多少小时内漏掉的消息 |
 | `LARKSPUR_BACKFILL_MAX` | `20` | 一次最多补发几条 |
 
@@ -194,6 +217,7 @@ cd Larkspur
 ```bash
 tests/test-listen.sh   # 图片与文字合并，约 20 秒
 tests/test-cards.sh    # 卡片防重复提交、控制台点击与设置保存，约 8 秒
+tests/test-guard.sh    # IP 守卫、桌面端启动闸门、总控自动启动，约 15 秒
 tests/test-recover.sh  # 监听顶替、断线补发、Stop 钩子提醒重启、总控合并监听、不留孤儿进程、路由转发，约 25 秒
 ```
 

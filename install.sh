@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Larkspur 安装脚本：把脚本装到 ~/.claude/larkspur，技能装到 ~/.claude/skills/feishu，
-# 并把 Stop / SessionEnd 钩子合并进 ~/.claude/settings.json（会先备份）。可重复执行。
+# 并把 SessionStart / Stop / SessionEnd 钩子合并进 ~/.claude/settings.json（会先备份）。可重复执行。
 set -euo pipefail
 
 SRC=$(cd "$(dirname "$0")" && pwd)
@@ -53,16 +53,52 @@ cp "$SETTINGS" "$SETTINGS.larkspur-bak.$(date +%Y%m%d%H%M%S)"
 stop_cmd="$DEST/hooks/notify.sh"
 end_cmd="$DEST/hooks/session-end.sh"
 ensure_cmd="$DEST/hooks/ensure-listener.sh"
+start_cmd="$DEST/hooks/session-start.sh"
 tmp=$(mktemp)
-jq --arg stop "$stop_cmd" --arg end "$end_cmd" --arg ensure "$ensure_cmd" '
+jq --arg stop "$stop_cmd" --arg end "$end_cmd" --arg ensure "$ensure_cmd" --arg start "$start_cmd" '
   def strip($c): map(select(([.hooks[]?.command] | index($c)) | not));
   .hooks //= {}
   | .hooks.Stop       = ((.hooks.Stop // [])       | strip($stop) | strip($ensure))
                         + [{hooks:[{type:"command", command:$stop, async:true, timeout:30}]},
                            {hooks:[{type:"command", command:$ensure, timeout:10}]}]
   | .hooks.SessionEnd = ((.hooks.SessionEnd // []) | strip($end))  + [{hooks:[{type:"command", command:$end, timeout:15}]}]
+  | .hooks.SessionStart = ((.hooks.SessionStart // []) | strip($start))
+                        + [{hooks:[{type:"command", command:$start, asyncRewake:true, timeout:90}]}]
 ' "$SETTINGS" > "$tmp"
 jq -e . "$tmp" >/dev/null && mv "$tmp" "$SETTINGS"
 say "钩子已写入 $SETTINGS（原文件已备份）"
+
+# 5. 桌面端启动闸门：配置了 LARKSPUR_EXPECTED_IP 时装为 ~/.local/bin/claude-desktop（PATH 里排在系统的前面）
+gate="$HOME/.local/bin/claude-desktop"
+if ( . "$DEST/config.sh"; [ -n "${LARKSPUR_EXPECTED_IP:-}" ] ); then
+  mkdir -p "$HOME/.local/bin"
+  [ ! -e "$gate" ] || grep -q 'Claude 桌面端的启动闸门' "$gate" || die "$gate 已存在且不是 Larkspur 的闸门，请先移走"
+  put "$SRC/lib/desktop-gate.sh" "$gate"; chmod +x "$gate"
+  say "桌面端启动闸门已装到 $gate：三个出口 IP 都是 $( . "$DEST/config.sh"; echo "$LARKSPUR_EXPECTED_IP") 才启动桌面端"
+elif [ -f "$gate" ] && grep -q 'Claude 桌面端的启动闸门' "$gate"; then
+  rm -f "$gate"; say "没有配置 LARKSPUR_EXPECTED_IP，已移除桌面端启动闸门"
+fi
+
+# 6. 「IP 闸门」设置程序：~/.local/bin/larkspur-ip-gate，桌面图标和应用菜单里各放一个
+ui="$HOME/.local/bin/larkspur-ip-gate"
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+put "$SRC/lib/ip-gate-ui.sh" "$ui"; chmod +x "$ui"
+entry="[Desktop Entry]
+Type=Application
+Name=IP 闸门
+Comment=设置是否启用出口 IP 检查（Larkspur）
+Exec=$ui
+Icon=preferences-system-network-proxy
+Terminal=false
+Categories=Utility;Network;"
+printf '%s\n' "$entry" > "$HOME/.local/share/applications/larkspur-ip-gate.desktop"
+desk=$(xdg-user-dir DESKTOP 2>/dev/null || true)
+if [ -n "$desk" ] && [ -d "$desk" ] && [ "$desk" != "$HOME" ]; then
+  printf '%s\n' "$entry" > "$desk/IP闸门.desktop"; chmod +x "$desk/IP闸门.desktop"
+  # XFCE 只直接运行被标记为可信的桌面启动器
+  command -v gio >/dev/null && gio set -t string "$desk/IP闸门.desktop" metadata::xfce-exe-checksum \
+    "$(sha256sum "$desk/IP闸门.desktop" | cut -d' ' -f1)" 2>/dev/null || true
+  say "「IP 闸门」设置程序已放到桌面：$desk/IP闸门.desktop"
+fi
 
 say "完成。已打开的会话可能需要重开才会加载新钩子与技能。"

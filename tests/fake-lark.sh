@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # Larkspur 离线测试用的假 lark-cli：模拟事件流、图片下载和卡片更新
+# 挂着等事件时和真的 lark-cli 一样：带 --timeout 时不理会 stdin 的 EOF（一直挂着），不带时读到 EOF 就退出。
+ARGS=" $* "
+hold() {
+  case "$ARGS" in *" --timeout "*) sleep 300 ;;
+    *) cat >/dev/null; echo "[event] exited — received 0 event(s) (reason: signal)" >&2 ;; esac
+  exit 0
+}
 case "$1 $2" in
   "event consume")
-    if [ "$3" = "application.bot.menu_v6" ]; then sleep 300; exit 0; fi
+    if [ "$3" = "application.bot.menu_v6" ]; then hold; fi
     if [ "$3" = "card.action.trigger" ]; then
       echo "[event] ready event_key=card.action.trigger" >&2
       c() { jq -cn --arg d "$1" --arg t "tok$2" --arg m "$3" \
@@ -27,12 +34,12 @@ case "$1 $2" in
       m oc_g om_r4 text "这张图是什么";                     sleep 0.3
       m oc_x om_r5 text "不认识的群";                       sleep 0.3
       m oc_g om_r6 image "[Image: img_v3_r6]"
-      sleep 300; exit 0
+      hold
     fi
     if [ "${FAKE_LARK_MODE:-}" = "recover" ]; then   # 连上后收到一条实时消息，然后一直挂着
       echo "[event] ready event_key=im.message.receive_v1" >&2
       printf '{"message_id":"om_live1","message_type":"text","content":"实时消息"}\n'
-      sleep 300; exit 0
+      hold
     fi
     echo "[event] ready event_key=im.message.receive_v1" >&2
     j() { printf '{"message_id":"om_test%s","message_type":"%s","content":"%s"}\n' "$1" "$2" "$3"; }

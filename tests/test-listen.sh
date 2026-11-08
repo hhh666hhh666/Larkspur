@@ -6,7 +6,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d); trap 'pkill -f "$TMP/" 2>/dev/null; rm -rf "$TMP"' EXIT
 cp "$ROOT"/lib/*.sh "$TMP/"
 export LARKSPUR_HOME="$TMP" LARKSPUR_LARK_CLI="$ROOT/tests/fake-lark.sh" \
-       LARKSPUR_OPEN_ID="ou_test" LARKSPUR_INBOX="$TMP/inbox" LARKSPUR_IMAGE_WAIT=10
+       LARKSPUR_OPEN_ID="ou_test" LARKSPUR_NET_REFRESH=0 LARKSPUR_INBOX="$TMP/inbox" LARKSPUR_IMAGE_WAIT=10
 chmod +x "$ROOT/tests/fake-lark.sh"
 start=$(date +%s)
 timeout 40 bash "$TMP/listen.sh" oc_test --hub | while IFS= read -r l; do

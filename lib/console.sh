@@ -3,9 +3,9 @@
 #   console.sh show [页面]                      确保私聊里有一张置顶的控制台卡片，并刷新到指定页面
 #   console.sh refresh                          控制台卡片已存在时，按当前页面重新渲染（状态变化时顺手调用）
 #   console.sh action <action_value> [form_value]  处理控制台卡片上的点击（由 listen-cards.sh 调用）
-# 页面：status（状态）、sessions（会话）、options（功能选项）。
+# 页面：status（状态）、sessions（会话）、net（网络检测）、options（功能选项）。
 # 控制台是总控私聊里的一张置顶卡片，所有操作都原地更新这张卡片，不另发消息。
-# 能用脚本完成的操作（切页、刷新、关闭同步、改设置、发新建卡片）都在这里直接做，不唤醒 Claude；
+# 能用脚本完成的操作（切页、刷新、关闭同步、改设置、发新建卡片、网络检测）都在这里直接做，不唤醒 Claude；
 # 需要桌面端工具的操作（归档会话）输出一行「飞书控制台请求: {...}」交给总控。
 set -u
 . "${LARKSPUR_HOME:-$HOME/.claude/larkspur}/common.sh"
@@ -71,7 +71,7 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
           | jq -Rsc 'split("\n") | map(select(length>0) | split(" ") | {(.[0]): (.[1]|tonumber)}) | add // {}')
 
   mem=0
-  for p in $(pgrep -f 'lark-cli event|/listen(-cards|-menu)?\.sh' 2>/dev/null); do
+  for p in $(pgrep -f 'lark-cli event|/listen(-cards|-menu)?\.sh|/netwatch\.sh' 2>/dev/null); do
     k=$(awk '/^Pss:/{print $2}' "/proc/$p/smaps_rollup" 2>/dev/null)
     [ -n "$k" ] || k=$(ps -p "$p" -o rss= 2>/dev/null | tr -d ' ')
     mem=$((mem + ${k:-0}))
@@ -83,12 +83,19 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
                printf '%s %s\n' "$hm" "${l:20}"
              done | jq -Rsc 'split("\n") | map(select(length>0)) | reverse')   # 新的在上
 
-  [ -n "$today" ] || today='{}'; [ -n "$events" ] || events='[]'
-  jq -cn --arg mode "$(router_active && echo router || echo none)" --arg up "$up" --argjson s "$sessions" \
+  net=$("$LARKSPUR_HOME/netcheck.sh" --cached 2>/dev/null | jq -c . 2>/dev/null)
+  at=$(printf '%s' "$net" | jq -r '.at // empty' 2>/dev/null)
+  if [ -n "$at" ]; then   # 检测时间按显示时区
+    at=$(TZ="$DISPLAY_TZ" date -d "@$at" +%H:%M:%S 2>/dev/null || TZ="$DISPLAY_TZ" date -r "$at" +%H:%M:%S)
+    net=$(printf '%s' "$net" | jq -c --arg t "$at" '.at_text = $t')
+  fi
+
+  [ -n "$today" ] || today='{}'; [ -n "$events" ] || events='[]'; [ -n "$net" ] || net='{}'
+  jq -cn --argjson net "$net" --arg now "$now" --arg netint "$NET_REFRESH" --arg expip "$EXPECTED_IP" --arg guard "$IP_GUARD_CMD" --arg guardon "$IP_GUARD" --arg gateon "$DESKTOP_GATE" --arg mode "$(router_active && echo router || echo none)" --arg up "$up" --argjson s "$sessions" \
      --argjson today "$today" --arg mem "$(( mem / 1024 ))" --argjson ev "$events" \
      --arg ack "$ACK_EMOJI" --arg wait "$IMAGE_WAIT" --arg bf "$BACKFILL_HOURS" --arg sm "$SPAWN_MODE" \
      --arg alerts "$ALERTS" --arg prefix "$GROUP_PREFIX" --arg root "$PROJECTS_ROOT" --arg time "$(TZ="$DISPLAY_TZ" date +%H:%M:%S)" \
-     '{mode:$mode, up:$up, sessions:$s, today:$today, mem:$mem, events:$ev, time:$time,
+     '{mode:$mode, up:$up, sessions:$s, today:$today, mem:$mem, events:$ev, time:$time, net:$net, now:($now|tonumber), netint:($netint|tonumber? // 0), expip:$expip, guard:$guard, guardon:$guardon, gateon:$gateon,
        opt:{ack:$ack, wait:$wait, backfill:$bf, spawn:$sm, alerts:$alerts, prefix:$prefix, root:$root}}'
 }
 
@@ -157,10 +164,62 @@ render() {   # <page> [提示] → 卡片 JSON
                | "<font color=\"grey\">\($w[0])</font>　\($labels[$t] // $t)\(if $nm then "　" + $nm else "" end)")
               | join("\n")) end))
           ]) as $stat
+    | ($d.net) as $n
+    | def tag($t; $c): "<text_tag color=\"\($c)\">\($t)</text_tag>";
+      def flag($cc): if ($cc | test("^[A-Za-z]{2}$")) then ($cc | ascii_upcase | explode | map(. + 127397) | implode) + " " else "" end;
+      def yn($v; $yes; $no): if $v == true then tag($yes; "red") elif $v == false then tag($no; "green") else tag("未知"; "neutral") end;
+      ($n.risk.score // null) as $score
+    | (if $n.restricted then {t:"不可访问", c:"red"}
+       elif $score == null then {t:"无数据", c:"neutral"}
+       elif $score >= 95 then {t:"极度纯净", c:"green"} elif $score >= 80 then {t:"纯净", c:"green"}
+       elif $score >= 50 then {t:"良好", c:"turquoise"} elif $score >= 25 then {t:"中性", c:"orange"}
+       else {t:"可疑", c:"red"} end) as $lv
+    | (if ($n.claude.ip // "") == "" then "" else "　\(if $n.restricted then 0 else $score // "—" end) \($lv.t)" end) as $netsum
+    | (if ($n.at // null) == null then
+         [ md("<font color=\"grey\">还没有检测过。点「重新检测」查看本机访问 Claude 的出口 IP 和风险，约 10 秒。</font>") ]
+       else
+         ($n.claude) as $c
+         | def exit_ip($t; $x; $bold): "**\($t)**　" + (if ($x.ip // "") == "" then "<font color=\"red\">获取失败</font>"
+             else flag($x.cc // "") + (if $bold then "**" + $x.ip + "**" else $x.ip end)
+                  + (if ($x.where // "") != "" then "\n<font color=\"grey\">" + $x.where + "</font>" else "" end) end);
+           [ md(exit_ip("中国出口 IPv4"; $n.cn // {}; false) + "\n" + exit_ip("Cloudflare 出口 IP"; $n.cloudflare // {}; false)
+                + "\n" + exit_ip("Claude AI 出口 IP"; $c; true)),
+             md("**信任评分**　\(if $n.restricted then "<font color=\"red\">0</font>" elif $score == null then "—" else "**\($score)**" end) \(tag($lv.t; $lv.c))"
+               + (if $n.restricted then "\n<font color=\"red\">出口 IP 位于\($n.restricted)，Claude 会严格风控，不建议登录</font>"
+                  elif $score == null then "" else "　<font color=\"grey\">\(if $score >= 95 then "该 IP 信誉极好" elif $score >= 80 then "该 IP 信誉优异" elif $score >= 50 then "该 IP 存在轻微风险" elif $score >= 25 then "该 IP 存在一定风险" else "该 IP 风险极高" end)</font>" end)
+               + "\n**Claude 支持地区**　\(if $n.restricted then tag("不支持"; "red") elif ($c.cc // "") == "" then tag("未知"; "neutral") else tag("正常"; "green") end)"),
+             md("**IP 属性**　\(if $n.risk.residential == true then tag("家庭住宅 IP"; "green") elif $n.risk.residential == false then tag("机房 IP"; "orange") else tag("未知"; "neutral") end)\(if ($n.risk.company_type // "") != "" then "（" + ({hosting:"Hosting", isp:"ISP", business:"Business", education:"Education"}[$n.risk.company_type] // $n.risk.company_type) + "）" else "" end)"
+               + "\n**ASN**　\(if $n.risk.asn then "AS\($n.risk.asn)" else "未知" end)　\($n.risk.org // "")"),
+             md("**安全检测**　VPN \(yn($n.risk.vpn; "VPN"; "未检测到"))　代理 \(yn($n.risk.proxy; "代理"; "未检测到"))　Tor \(yn($n.risk.tor; "Tor"; "未检测到"))"
+               + "\n机器人 \(yn($n.risk.crawler; "是"; "否"))　滥用记录 \(yn($n.risk.abuser; "有记录"; "无记录"))"),
+             md("**可用性**　" + ([ ($n.latency // [])[] | "\(.name) " + (if $n.restricted or .ms < 0 then tag("不可访问"; "red")
+                   elif .ms < 250 then tag("正常"; "green") elif .ms < 500 then tag("良好"; "turquoise") else tag("较慢"; "orange") end)
+                   + (if .ms >= 0 then " <font color=\"grey\">\(.ms)ms</font>" else "" end) ] | join("　"))
+               + "\n**Claude 服务状态**　" + (if $n.status == null then tag("未知"; "neutral")
+                   else ({none:["全部服务正常","green"], minor:["轻微故障","orange"], major:["重大故障","red"], critical:["严重故障","red"], maintenance:["维护中","orange"]}[$n.status.indicator] // ["服务异常","orange"]) as $st
+                   | tag($st[0]; $st[1]) + (if ($n.status.down | length) > 0 then "\n<font color=\"grey\">受影响：\($n.status.down | join("、"))</font>" else "" end) end)),
+             md("**DNS 泄露**　" + (if ($n.dns.servers | length) == 0 then tag("DNS 加密或未暴露出口"; "green")
+                   elif $n.dns.leak then tag("可能泄露"; "orange") else tag("未检测到泄露"; "green") end)
+               + (([ $n.dns.servers[] | select(.cc == "cn") ] + $n.dns.servers) | first // null | if . then
+                   "\n**DNS 出口**　\(flag(.cc))\(.ip)\(if .isp != "" then "　<font color=\"grey\">" + .isp + "</font>" else "" end)" else "" end)),
+             (if $d.expip == "" then empty else
+               ([$n.cn.ip?, $n.cloudflare.ip?, $n.claude.ip?] | map(. // "")) as $ips
+               | md("**IP 守卫**　三个出口都应为 \($d.expip)　"
+                   + (if any($ips[]; . != "" and . != $d.expip) then tag("不符"; "red")
+                      elif all($ips[]; . == $d.expip) then tag("一致"; "green") else tag("未查全"; "neutral") end)
+                   + "\n**启动闸门** \(if $d.gateon == "off" then tag("已关闭"; "neutral") else tag("开"; "green") end)　桌面端启动前检查，不通过不启动"
+                   + "\n**运行中守卫** \(if $d.guardon == "off" then tag("已关闭"; "neutral") else tag("开"; "green") end)　每次刷新后检查，不符时\(if $d.guard != "" then "运行 " + ($d.guard | split("/") | last) else "只提醒（没有配置守卫命令）" end)"
+                   + "\n<font color=\"grey\">在电脑桌面的「IP 闸门」程序里开关</font>") end),
+             md("<font color=\"grey\">检测于 \($n.at_text // "")　·　\(if $d.netint > 0 then "每 \($d.netint) 秒自动检测" else "自动检测已关闭" end)　·　数据来自 ip.net.coffee　·　WebRTC 只存在于浏览器，不检测</font>") ]
+       end
+       + [ row([btn("重新检测"; {op:"netcheck"}; "primary"),
+                {tag:"button", text:pt("打开网页版"), type:"default", size:"small",
+                 behaviors:[{type:"open_url", default_url:"https://ip.net.coffee/claude/"}]}]) ]) as $netels
     | ([ $d.sessions[] | select(.active and (.hub | not)) ] | length) as $nact
     | ([ row([btn("刷新"; {op:"refresh", page:$page}; "default"), btn("新建会话"; {op:"new"}; "primary")]),
          panel("**状态**"; ($page == "status"); $stat),
          panel("**会话**　\($nact) 个同步中"; ($page == "sessions"); $sess),
+         panel("**网络检测**\($netsum)"; ($page == "net"); $netels),
            panel("**功能选项**"; ($page == "options"); $opts) ])
 
     as $content
@@ -191,13 +250,22 @@ publish() {   # <page> [提示] [force_new]：原地更新；失败或没有卡�
 }
 
 case "${1:-show}" in
-  show)    publish "${2:-$(cget page)}" "${3:-}" ;;   # 页面：none（全部收起）、status、sessions、options
+  show)    publish "${2:-$(cget page)}" "${3:-}"   # 页面：none（全部收起）、status、sessions、net、options
+           # 网络检测结果超过 30 分钟（或要看的就是网络页且超过 5 分钟）时，在后台重新检测，完成后再刷新一次
+           at=$("$LARKSPUR_HOME/netcheck.sh" --cached | jq -r '.at // 0'); age=$(( $(date +%s) - ${at:-0} ))
+           if [ "$age" -gt 1800 ] || { [ "${2:-}" = net ] && [ "$age" -gt 300 ]; }; then
+             ( "$LARKSPUR_HOME/netcheck.sh" >/dev/null 2>&1 && "$0" refresh >/dev/null 2>&1; "$LARKSPUR_HOME/ipguard.sh" --cached >/dev/null 2>&1 & )
+           fi ;;
   refresh) [ -n "$(cget message_id)" ] && publish "$(cget page)" ;;
   render)  render "${2:-status}" "${3:-}" ;;   # 只输出卡片 JSON，测试用
   action)
     v="${2:-}"; [ -n "$v" ] || v='{}'; fv="${3:-}"; op=$(printf '%s' "$v" | jq -r '.op // ""'); page=$(cget page); page=${page:-status}
     case "$op" in
       page|refresh) publish "$(printf '%s' "$v" | jq -r '.page // "status"')" ;;
+      netcheck)   # 先给个「检测中」，检测完再原地更新
+        publish net "正在检测，约 10 秒…"
+        if "$LARKSPUR_HOME/netcheck.sh" >/dev/null 2>&1; then publish net; else publish net "检测失败，请稍后再试"; fi
+        "$LARKSPUR_HOME/ipguard.sh" --cached >/dev/null 2>&1 ;;
       new)   # 新卡片出现本身就是反馈，不再刷新控制台；失败时才提示
         "$LARKSPUR_HOME/card-new.sh" >/dev/null 2>&1 || publish "$page" "发出新建会话卡片失败，请看日志" ;;
       off)   # 先改状态、刷新卡片，给群里发「已关闭」的那条消息放到后台，少等一次接口调用
@@ -243,5 +311,5 @@ case "${1:-show}" in
         if [ -n "$errs" ]; then publish options "已保存其余设置；未保存：$errs"; else publish options "已保存，立即生效"; fi ;;
       *) publish "$page" ;;
     esac ;;
-  *) echo "用法：console.sh show [status|sessions|options] | refresh | action <value> [form]" >&2; exit 1 ;;
+  *) echo "用法：console.sh show [status|sessions|net|options] | refresh | action <value> [form]" >&2; exit 1 ;;
 esac

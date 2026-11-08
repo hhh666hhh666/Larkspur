@@ -33,3 +33,19 @@ LARKSPUR_ACK_EMOJI="Get"
 
 # 发回飞书失败、或某个群的消息因会话已关闭同步而没有转发时，在飞书里提醒你：on 或 off。
 LARKSPUR_ALERTS="on"
+
+# 总控在跑时，每隔多少秒重新做一次网络检测（出口 IP、信任评分等）并刷新控制台卡片；0 关闭。
+LARKSPUR_NET_REFRESH="60"
+
+# IP 守卫：三个出口 IP（国内网站、Cloudflare、Claude 看到的）都应是这个 IP；留空不检查。
+# 设了以后，install.sh 会装上桌面端启动闸门（~/.local/bin/claude-desktop）：三个都确认相符才启动桌面端，否则不启动、不联网。
+LARKSPUR_EXPECTED_IP=""
+# 桌面端启动前最多等多少秒让 IP 变对（开机时代理可能还没起来），期满仍不符就不启动。
+LARKSPUR_DESKTOP_GATE_WAIT="30"
+# 开关（也可以用桌面上的「IP 闸门」程序切换）：桌面端启动闸门、运行中的 IP 守卫，on 或 off。
+LARKSPUR_DESKTOP_GATE="on"
+LARKSPUR_IP_GUARD="on"
+# 运行中（会话启动时、每次网络检测刷新后）发现出口 IP 不符时运行的命令，stdin 会收到 "y"；留空只提醒。
+LARKSPUR_IP_GUARD_CMD=""
+# 桌面端启动、总控会话被拉起时，自动让它启动飞书监听：on 或 off。
+LARKSPUR_HUB_AUTOSTART="on"

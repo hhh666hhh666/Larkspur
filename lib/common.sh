@@ -25,6 +25,11 @@ ACK_EMOJI="${LARKSPUR_ACK_EMOJI-Get}"                # 收到消息时给它加�
 DISPLAY_TZ="${LARKSPUR_DISPLAY_TZ:-Asia/Shanghai}"   # 控制台显示时间用的时区（默认 UTC+8）
 ALERTS="${LARKSPUR_ALERTS:-on}"                       # 转发或发回失败时，在总控私聊里提醒
 BACKFILL_HOURS="${LARKSPUR_BACKFILL_HOURS:-12}"       # 监听重启时，最多补取多少小时内漏掉的消息
+EXPECTED_IP="${LARKSPUR_EXPECTED_IP:-}"                # 三个出口 IP 都应是它；空则不检查（见 ipguard.sh、desktop-gate.sh）
+IP_GUARD_CMD="${LARKSPUR_IP_GUARD_CMD:-}"              # 出口 IP 不符时运行的命令（stdin 会收到 "y"）
+IP_GUARD="${LARKSPUR_IP_GUARD:-on}"                    # 运行中的 IP 守卫开关（on/off）
+DESKTOP_GATE="${LARKSPUR_DESKTOP_GATE:-on}"            # 桌面端启动闸门开关（on/off）
+NET_REFRESH="${LARKSPUR_NET_REFRESH:-60}"              # 总控在跑时，每隔多少秒重新做一次网络检测并刷新控制台，0 关闭
 BACKFILL_MAX="${LARKSPUR_BACKFILL_MAX:-20}"           # 一次最多补发几条
 
 mkdir -p "$STATE_DIR" "$INBOX" "$RUN_DIR"
@@ -100,10 +105,39 @@ claim_listener() {   # 顶替同名的旧实例（连同它的 lark-cli 子进�
   trap "release_listener '$1'" EXIT
 }
 release_listener() { [ "$(cat "$RUN_DIR/$1.pid" 2>/dev/null)" = "$$" ] && rm -f "$RUN_DIR/$1.pid"; }
-# 给 lark-cli event consume 占住 stdin（它读到 EOF 就会退出）。父进程一退出就跟着退出，不留孤儿。
-hold_stdin() { while kill -0 "$1" 2>/dev/null; do sleep 30; done; }
-# lark-cli 的退出行：到时（reason: timeout）是正常续期，不必通知 Claude
-is_normal_exit() { case "$1" in *exited*"reason: timeout"*) return 0 ;; esac; return 1; }
+# 给 lark-cli event consume 占住 stdin：它读到 EOF 约 2 秒内退出。hold_stdin <本脚本 pid> <秒数> [其他 pid…]
+# 在这些进程任何一个退出、或到了秒数时结束，lark-cli 随之退出（卡片、菜单监听还要看着总控的 listen.sh）。所以 consume 不能带 --timeout：带了 --timeout
+# lark-cli 就不理会 stdin 的 EOF，监听脚本被杀（桌面端重启）后它会成为孤儿，继续占着事件直到到时。
+# 到时结束前留一个标记，is_normal_exit 据此把这次退出当作正常续期。
+hold_stdin() {
+  local me="$1" secs="${2:-0}" end p
+  end=$(( $(date +%s) + secs )); shift 2
+  while kill -0 "$me" 2>/dev/null; do
+    for p in "$@"; do [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null && return; done
+    if [ "$secs" -gt 0 ] && [ "$(date +%s)" -ge "$end" ]; then : > "$RUN_DIR/renew.$me"; return; fi
+    sleep "${LARKSPUR_HOLD_POLL:-10}"
+  done
+}
+# lark-cli 的退出行：到时是正常续期（旧写法 reason: timeout，或 hold_stdin 到时留了标记），不必通知 Claude
+is_normal_exit() {
+  case "$1" in *exited*"reason: timeout"*) return 0 ;; esac
+  [ -f "$RUN_DIR/renew.$$" ] && { rm -f "$RUN_DIR/renew.$$"; return 0; }
+  return 1
+}
+# 清掉上一轮监听留下的孤儿 lark-cli：就是 $LARK、同一个事件键、带着本人 open_id 的筛选条件、父进程已不是监听脚本。
+# 正常情况下 hold_stdin 会让它们自己退出；这里兜底，免得新监听和孤儿抢同一路事件。
+reap_orphan_consumers() {   # <事件键>
+  local p pp
+  for p in $(pgrep -u "$(id -u)" -f "event consume $1" 2>/dev/null); do
+    [ "$p" = "$$" ] && continue
+    # 必须就是 lark-cli 本身（命令行以「$LARK event consume <键> 」开头，前面最多一个解释器），且筛选条件里有本人 open_id
+    tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | awk -v l="$LARK event consume $1 " -v o="$OPEN_ID" \
+      '{ i = index($0, l) } i == 1 || (i > 1 && substr($0, 1, i - 1) !~ / ./) { if (index($0, o)) ok = 1 } END { exit !ok }' || continue
+    pp=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    [ -n "$pp" ] && ps -o args= -p "$pp" 2>/dev/null | grep -q 'listen' && continue
+    kill "$p" 2>/dev/null && fs_log "orphan-reaped key=$1 pid=$p"
+  done
+}
 iso_time() { date -d "@$1" -Iseconds 2>/dev/null || date -r "$1" +%Y-%m-%dT%H:%M:%S%z; }
 
 # ---- 路由模式：有活动的总控时，由总控统一监听所有群，并用 send_message 把消息投进各会话 ----
