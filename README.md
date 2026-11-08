@@ -99,6 +99,7 @@ Claude Code 会话 ◄──────────────► on.sh：机�
 | `lib/netwatch.sh` | 每分钟重做网络检测、刷新控制台、跑 IP 守卫，由常驻服务拉起 |
 | `lib/exit-ips.sh` | 并发查三个出口 IP（国内网站、Cloudflare、Claude 看到的），可判断是否都等于期望 IP |
 | `lib/ipguard.sh` | IP 守卫：出口 IP 不符时提醒并运行守卫命令（会话启动时、每次网络检测刷新后） |
+| `lib/guard-kill.sh` | 守卫专用的结束命令：结束带 claude 的进程和 Claude 网页窗口，但放过 Larkspur 服务自己（网页控制台、飞书监听）；`--list` 只列出不动手 |
 | `lib/desktop-start.sh` | 手动启动桌面端（网页、飞书卡片上的按钮），经过启动闸门 |
 | `lib/desktop-gate.sh` | 桌面端启动闸门，装为 `~/.local/bin/claude-desktop`：三个出口 IP 都相符才启动桌面端 |
 | `hooks/session-start.sh` | SessionStart 钩子：会话启动时跑 IP 守卫；桌面端拉起总控会话时直接开始等飞书事件 |
@@ -219,6 +220,7 @@ cd Larkspur
 
 - **桌面端启动前**（先于一切）：`install.sh` 把闸门装成 `~/.local/bin/claude-desktop`。菜单、面板图标、`claude://` 链接都按 PATH 找 `claude-desktop`，而 `~/.local/bin` 排在最前，所以每次启动都先过闸门：三个 IP 都查到且相符才启动真正的桌面端；否则在 `LARKSPUR_DESKTOP_GATE_WAIT` 秒内重查，期满仍不通过就不启动——桌面端不运行，也就不会联网，同时弹出桌面通知并在飞书私聊里提醒。桌面端已在运行时（点 `claude://` 链接）直接放行。直接运行 `/usr/bin/claude-desktop` 会绕过闸门。
 - **运行中**：每个会话启动时（SessionStart 钩子），以及控制台每次网络检测刷新之后，都跑一次 IP 守卫。有任何一个 IP 查到了且不符，就再现查两次确认，然后在飞书私聊里提醒，并运行 `LARKSPUR_IP_GUARD_CMD`（例如结束所有 Claude 进程的脚本）。查不到 IP（断网）不算不符。
+- **守卫命令用 `guard-kill.sh`**：常见的「结束 Claude 进程」脚本按命令行里含 claude 结束进程，会把装在 `~/.claude/larkspur` 的常驻服务（网页控制台）一起结束，IP 不改回来面板就打不开。把 `LARKSPUR_IP_GUARD_CMD` 设为 `~/.claude/larkspur/guard-kill.sh`：Claude 桌面端、会话和网页窗口照样结束，服务和飞书监听留着，可以直接在控制台里改期望 IP。手动用的结束脚本不受影响，照旧连 Larkspur 一起结束。
 - **桌面端只能手动启动**：Larkspur 从不自动启动或重启 Claude 桌面端（`desktop-start.sh` 是唯一的启动入口，只由按钮触发）。在网页控制台或飞书控制台卡片上点「启动桌面端」，同样先过启动闸门；启动的桌面端放在单独的 systemd scope 里，关闭 Larkspur 不会连带关掉它。总控新建会话时，桌面端没开就不导入（`claude://` 链接会把桌面端拉起来）。
 - **开关**：在本地网页控制台的「IP 闸门」卡片里开关「启动闸门」和「运行中守卫」、改期望 IP，保存后立即生效。打开守卫或改期望 IP 会让守卫马上动手时，会先弹确认。
 - **自动启动总控**：桌面端启动时会自动拉起之前打开的会话。总控会话被拉起时，SessionStart 钩子发现它的飞书监听没在跑，就唤醒它启动监听；万一总控会话没被拉起，30 秒后由一个开着同步的会话给总控发消息，把它拉起来。
@@ -253,7 +255,7 @@ cd Larkspur
 | `LARKSPUR_EXPECTED_IP` | 空 | 三个出口 IP 都应是它；留空不检查。设了以后 `install.sh` 会装上桌面端启动闸门 |
 | `LARKSPUR_DESKTOP_GATE_WAIT` | `30` | 桌面端启动前最多等多少秒让 IP 变对，期满仍不符就不启动 |
 | `LARKSPUR_DESKTOP_GATE` / `LARKSPUR_IP_GUARD` | `on` | 启动闸门、运行中守卫的开关，本地网页控制台里可切换 |
-| `LARKSPUR_IP_GUARD_CMD` | 空 | 运行中发现出口 IP 不符时运行的命令（stdin 收到 `y`）；留空只提醒 |
+| `LARKSPUR_IP_GUARD_CMD` | 空 | 运行中发现出口 IP 不符时运行的命令（stdin 收到 `y`）；留空只提醒。建议用 `~/.claude/larkspur/guard-kill.sh` |
 | `LARKSPUR_HUB_AUTOSTART` | `on` | 桌面端启动、总控会话被拉起时，自动让它启动飞书监听 |
 | `LARKSPUR_BACKFILL_HOURS` | `12` | 监听恢复时，最多补发多少小时内漏掉的消息 |
 | `LARKSPUR_BACKFILL_MAX` | `20` | 一次最多补发几条 |

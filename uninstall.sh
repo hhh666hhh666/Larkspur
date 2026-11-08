@@ -29,7 +29,7 @@ fi
 
 rm -f "$DEST"/common.sh "$DEST"/on.sh "$DEST"/off.sh "$DEST"/listen.sh "$DEST"/hub-on.sh "$DEST"/spawn.sh \
       "$DEST"/card-new.sh "$DEST"/card-update.sh "$DEST"/listen-cards.sh "$DEST"/say.sh "$DEST"/mode.sh "$DEST"/console.sh "$DEST"/listen-menu.sh \
-      "$DEST"/netcheck.sh "$DEST"/netwatch.sh "$DEST"/exit-ips.sh "$DEST"/ipguard.sh "$DEST"/desktop-gate.sh
+      "$DEST"/netcheck.sh "$DEST"/netwatch.sh "$DEST"/exit-ips.sh "$DEST"/ipguard.sh "$DEST"/guard-kill.sh "$DEST"/desktop-gate.sh
 gate="$HOME/.local/bin/claude-desktop"
 [ -f "$gate" ] && grep -q 'Claude 桌面端的启动闸门' "$gate" && rm -f "$gate" && say "已移除桌面端启动闸门 $gate"
 desk=$(xdg-user-dir DESKTOP 2>/dev/null || true)

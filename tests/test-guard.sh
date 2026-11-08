@@ -94,4 +94,30 @@ check "启动闸门关闭时不检查直接启动" '[ $r = 0 ] && [ -f "$TMP/des
 printf 'LARKSPUR_IP_GUARD="off"\n' >> "$TMP/config.sh"
 reset; FAKE_CN=9.9.9.9 bash "$TMP/ipguard.sh"; r=$?
 check "运行中守卫关闭时不动手" '[ $r = 0 ] && [ ! -f "$TMP/guard-ran" ]'
+
+# 守卫专用的结束脚本 guard-kill.sh：结束带 claude 的进程，但放过 Larkspur 服务和它运行的 Larkspur 脚本。
+# 只在测试自己起的进程上动手（LARKSPUR_GUARD_ONLY 限定在临时目录里），不碰真的 Claude 和浏览器窗口
+case "${TMP,,}" in
+  *claude*) echo "SKIP 临时目录 $TMP 里有 claude，跳过 guard-kill.sh 的测试" ;;
+  *)
+    H="$TMP/.claude/larkspur"; G="$TMP/gk"; mkdir -p "$H" "$G"
+    cp "$TMP/common.sh" "$TMP/guard-kill.sh" "$H/"; : > "$H/config.sh"
+    for f in "$H/netwatch.sh" "$G/claude-desktop" "$G/claude" "$G/other"; do printf '#!/usr/bin/env bash\nexec -a "$0" sleep 300\n' > "$f"; done
+    printf 'import subprocess, sys, time\nsubprocess.Popen(["bash", sys.argv[1] + "/netwatch.sh"])\nsubprocess.Popen(["bash", sys.argv[2] + "/claude-desktop"])\ntime.sleep(300)\n' > "$H/larkspurd.py"
+    setsid python3 "$H/larkspurd.py" "$H" "$G" </dev/null >/dev/null 2>&1 & dp=$!
+    setsid bash "$G/claude" </dev/null >/dev/null 2>&1 & cl=$!
+    setsid bash "$G/other" </dev/null >/dev/null 2>&1 & ot=$!
+    mkdir -p "$H/run"; printf '{"pid":%s}\n' "$dp" > "$H/run/daemon.json"
+    for _ in $(seq 1 50); do nw=$(pgrep -f "^$H/netwatch.sh") && fd=$(pgrep -f "^$G/claude-desktop") && break; sleep 0.1; done
+    gone() { ! kill -0 "$1" 2>/dev/null || [ "$(awk '{print $3}' "/proc/$1/stat" 2>/dev/null)" = Z ]; }
+    lst=$(LARKSPUR_HOME="$H" LARKSPUR_GUARD_ONLY="$TMP" bash "$H/guard-kill.sh" --list)
+    check "guard-kill.sh --list：列出桌面端和 Claude 进程，不列 Larkspur 服务，也不动手" \
+      'printf "%s" "$lst" | grep -q "$G/claude-desktop" && printf "%s" "$lst" | grep -q "$G/claude 300" && ! printf "%s" "$lst" | grep -qE "larkspurd|netwatch" && ! gone "$cl" && ! gone "$fd"'
+    out=$(LARKSPUR_HOME="$H" LARKSPUR_GUARD_ONLY="$TMP" bash "$H/guard-kill.sh"); r=$?
+    check "guard-kill.sh：结束 Claude 进程和服务启动的桌面端" '[ $r = 0 ] && gone "$cl" && gone "$fd"'
+    check "guard-kill.sh：放过 Larkspur 服务和它运行的 Larkspur 脚本（网页控制台还在）" '! gone "$dp" && ! gone "$nw"'
+    check "guard-kill.sh：不碰命令行里没有 claude 的进程" '! gone "$ot"'
+    check "guard-kill.sh：记日志" 'grep -q "guard-kill procs=2 windows=0 left=0" "$H/larkspur.log"'
+    kill "$dp" "$nw" "$ot" 2>/dev/null ;;
+esac
 exit $fail
