@@ -9,6 +9,6 @@ export LARKSPUR_HOME="$TMP" LARKSPUR_LARK_CLI="$ROOT/tests/fake-lark.sh" \
        LARKSPUR_OPEN_ID="ou_test" LARKSPUR_INBOX="$TMP/inbox" LARKSPUR_IMAGE_WAIT=10
 chmod +x "$ROOT/tests/fake-lark.sh"
 start=$(date +%s)
-timeout 40 bash "$TMP/listen.sh" oc_test | while IFS= read -r l; do
+timeout 40 bash "$TMP/listen.sh" oc_test --hub | while IFS= read -r l; do
   printf '[+%2ss] %s\n' $(( $(date +%s) - start )) "$l"
 done

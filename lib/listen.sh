@@ -2,10 +2,9 @@
 # 用法：listen.sh <chat_id> [--hub]
 # 供 Claude Code 的 Monitor 使用：stdout 每行是一个事件（200ms 内的多行会合并为一条通知）。
 #
-# 两种模式：
-# - 普通会话（不带参数）：只放行「这个群里、用户本人」发的消息。有活动的总控时，消息改由总控转发，
-#   这里输出一行「飞书监听状态: 总控已接管…」后直接退出。
-# - 总控（--hub，旧写法 --with-cards 等同）：
+# 只有总控能监听（--hub，旧写法 --with-cards 等同）。普通会话不允许各自监听：
+# 不带 --hub 启动时输出一行「飞书监听状态: …」后直接退出，各会话的群消息一律由总控转发。
+# 总控：
 #   1. 自己私聊里的消息照常输出；
 #   2. 后台跑 listen-cards.sh，卡片提交也从这里输出；
 #   3. 后台跑 listen-menu.sh，响应机器人菜单里的「控制台」按钮；私聊里发「控制台」「状态」「会话」「设置」
@@ -25,12 +24,23 @@ chat="${1:?缺少 chat_id}"
 hub=""; case "${2:-}" in --hub|--with-cards) hub=1 ;; esac
 WAIT="$IMAGE_WAIT"
 
-if [ -z "$hub" ] && router_active; then
-  printf '飞书监听状态: 总控已接管本会话的飞书消息转发，消息会以气泡形式直接出现在本会话里，本会话不需要自己的监听，不要重启这个 Monitor\n'
+if [ -z "$hub" ]; then
+  if router_active; then
+    printf '飞书监听状态: 总控已接管本会话的飞书消息转发，消息会以气泡形式直接出现在本会话里，本会话不需要自己的监听，不要重启这个 Monitor\n'
+  else
+    printf '飞书监听状态: 普通会话不能自己监听，飞书消息只由总控转发。当前没有总控，请在一个常开的会话里执行 /feishu hub；不要重启这个 Monitor\n'
+  fi
+  fs_log "listen-refused chat=$chat hub=$(router_active && echo yes || echo no)"
   exit 0
 fi
 
 claim_listener "$chat.msg"
+# 不允许各会话自己监听：总控一启动就停掉还在跑的会话监听（旧版本留下的），它们的消息由总控转发
+for c in $(routed_chats); do
+  [ "$c" = "$chat" ] && continue
+  op=$(cat "$RUN_DIR/$c.msg.pid" 2>/dev/null)
+  if listener_pid_ok "$op"; then kill_tree "$op"; rm -f "$RUN_DIR/$c.msg.pid"; fs_log "session-listener-stopped chat=$c pid=$op"; fi
+done
 cards_pid=""; menu_pid=""
 if [ -n "$hub" ]; then
   "$LARKSPUR_HOME/listen-cards.sh" "$chat" & cards_pid=$!
@@ -150,8 +160,7 @@ backfill() {    # 补发上一个监听启动以来漏掉的消息（第一次�
   done
 }
 
-if [ -n "$hub" ]; then filter="select(.sender_id == \"$OPEN_ID\")"
-else filter="select(.chat_id == \"$chat\" and .sender_id == \"$OPEN_ID\")"; fi
+filter="select(.sender_id == \"$OPEN_ID\")"
 
 "$LARK" event consume im.message.receive_v1 --as bot --timeout 29m \
   --jq "$filter | {chat_id, message_id, message_type, content}" \

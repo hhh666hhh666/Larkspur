@@ -27,7 +27,10 @@ claude_bin="${LARKSPUR_CLAUDE_BIN:-}"
 [ -x "$claude_bin" ] || fail "找不到 claude 命令，请在 config.sh 里设置 LARKSPUR_CLAUDE_BIN"
 
 # 1. 后台创建会话（-p 模式回复一句即退出；此时还没有同步记录，SessionEnd 钩子不会误关）
-out=$(cd "$dir" && timeout 180 "$claude_bin" -p "这是 Larkspur 从飞书新建的会话。请只回复：已创建" \
+#    去掉从总控继承来的会话变量：否则新会话的钩子会以为自己就是总控，把总控的同步记录迁走
+out=$(cd "$dir" && timeout 180 env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_HOST_SESSION_ID \
+        -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_CHILD_SESSION \
+        "$claude_bin" -p "这是 Larkspur 从飞书新建的会话。请只回复：已创建" \
         --output-format json 2>/dev/null) || fail "后台创建会话失败"
 sid=$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$sid" ] || fail "没有拿到会话 ID"

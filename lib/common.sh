@@ -35,18 +35,51 @@ state_file() { printf '%s/%s.json' "$STATE_DIR" "$1"; }
 # 桌面端重启或压缩上下文后，同一个桌面端会话可能换了新的会话 ID（CLAUDE_CODE_SESSION_ID），
 # 但桌面端会话 ID（CLAUDE_CODE_HOST_SESSION_ID，即 local_…）不变；找到后把记录迁到新的会话 ID 下。
 # 总是输出记录文件的路径（可能不存在），调用方自己判断 [ -f ]。
+# 例外：会话里再起的 claude（如总控用 claude -p 新建会话）会继承父会话的桌面端会话 ID，
+# 它的钩子不能把父会话的记录当成自己的迁走，见 nested_in_session。
 resolve_state() {
-  local sid="$1" f old h="${CLAUDE_CODE_HOST_SESSION_ID:-}"
+  local sid="$1" f old h="${CLAUDE_CODE_HOST_SESSION_ID:-}" claim
   f=$(state_file "$sid")
   if [ ! -f "$f" ] && [ -n "$h" ] && [ "$sid" = "${CLAUDE_CODE_SESSION_ID:-}" ]; then
     for old in "$STATE_DIR"/*.json; do
       [ -f "$old" ] && jq -e --arg h "$h" '.desktop_id == $h' "$old" >/dev/null 2>&1 || continue
-      jq --arg s "$sid" '.session_id = $s' "$old" > "$f.tmp" && mv "$f.tmp" "$f" && rm -f "$old"
-      fs_log "state-migrated old=$(basename "$old" .json) sid=$sid desktop=$h"
+      if nested_in_session "$sid"; then
+        fs_log "state-migrate-skipped old=$(basename "$old" .json) sid=$sid desktop=$h reason=nested"
+        break
+      fi
+      # 先把旧记录原子地挪走再改写：同时触发的几个钩子只有一个能迁成功，不会互相覆盖
+      claim="$f.claim.$$"
+      mv "$old" "$claim" 2>/dev/null || break
+      if jq --arg s "$sid" '.session_id = $s' "$claim" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"; then
+        rm -f "$claim"
+        fs_log "state-migrated old=$(basename "$old" .json) sid=$sid desktop=$h"
+      else
+        rm -f "$f.tmp.$$"; mv "$claim" "$old"
+      fi
       break
     done
   fi
   printf '%s' "$f"
+}
+# 当前进程是不是嵌在另一个会话里：找到最近的 claude 祖先进程（即运行本钩子的那个 claude），
+# 看它启动时的环境里有没有别的 CLAUDE_CODE_SESSION_ID。桌面端直接拉起的 claude 进程环境里
+# 没有这个变量（只有它再拉起的 shell 里才有），而在会话的 shell 里跑的 claude 会继承父会话的。
+# 只在有 /proc 的系统上能判断；判断不了时当作不是。
+nested_in_session() {
+  local me="$1" p="$PPID" v n=0 a0 a1
+  [ -d /proc/self ] || return 1
+  while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$n" -lt 30 ]; do
+    { IFS= read -r -d '' a0; IFS= read -r -d '' a1; } < "/proc/$p/cmdline" 2>/dev/null
+    case "${a0##*/} ${a1:-}" in
+      "claude "*|node*claude-code*)
+        v=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^CLAUDE_CODE_SESSION_ID=//p' | head -1)
+        [ -n "$v" ] && [ "$v" != "$me" ]
+        return ;;
+    esac
+    a0=""; a1=""
+    p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null); n=$((n+1))
+  done
+  return 1
 }
 require_open_id() {
   [ -n "$OPEN_ID" ] || { echo "未配置 LARKSPUR_OPEN_ID，请编辑 $LARKSPUR_HOME/config.sh" >&2; exit 1; }

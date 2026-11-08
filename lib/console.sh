@@ -84,7 +84,7 @@ collect() {   # 把渲染需要的数据收集成一个 JSON
              done | jq -Rsc 'split("\n") | map(select(length>0)) | reverse')   # 新的在上
 
   [ -n "$today" ] || today='{}'; [ -n "$events" ] || events='[]'
-  jq -cn --arg mode "$(router_active && echo router || echo direct)" --arg up "$up" --argjson s "$sessions" \
+  jq -cn --arg mode "$(router_active && echo router || echo none)" --arg up "$up" --argjson s "$sessions" \
      --argjson today "$today" --arg mem "$(( mem / 1024 ))" --argjson ev "$events" \
      --arg ack "$ACK_EMOJI" --arg wait "$IMAGE_WAIT" --arg bf "$BACKFILL_HOURS" --arg sm "$SPAWN_MODE" \
      --arg alerts "$ALERTS" --arg prefix "$GROUP_PREFIX" --arg root "$PROJECTS_ROOT" --arg time "$(TZ="$DISPLAY_TZ" date +%H:%M:%S)" \
@@ -146,8 +146,8 @@ render() {   # <page> [提示] → 卡片 JSON
             setinput("prefix"; $d.opt.prefix; "例如 Claude"),
             md("**项目根目录**　新建会话卡片里列出的目录，改完按回车保存"),
             setinput("root"; $d.opt.root; "绝对路径"),
-          md("<font color=\"grey\">接收方式：\(if $d.mode == "router" then "总控统一转发" else "各会话自己监听" end)。切换方法：在总控里执行 /feishu off（改回各自监听）或 /feishu hub（开启转发）。</font>") ]) as $opts
-    | ([ md("**接收方式**　\(if $d.mode == "router" then "总控统一转发" else "各会话自己监听" end)\n**总控监听**　\($d.up)\n**同步中的会话**　\([$d.sessions[] | select(.active and (.hub | not))] | length) 个\n**今天**　收到 \($d.today.inbound // 0) 条 · 转发 \($d.today.route // 0) 条 · 发回 \($d.today.outbound // 0) 条\(if ($d.today["outbound-failed"] // 0) > 0 then " · <font color=\"red\">发回失败 \($d.today["outbound-failed"]) 次</font>" else "" end)\n**常驻内存**　\($d.mem) MB"),
+          md("<font color=\"grey\">接收方式：只由总控统一监听并转发，不允许各会话自己监听。没有总控时各会话收不到飞书消息，在一个常开的会话里执行 /feishu hub 即可。</font>") ]) as $opts
+    | ([ md("**接收方式**　\(if $d.mode == "router" then "总控统一转发" else "<font color=\"red\">没有总控，各会话收不到消息</font>" end)\n**总控监听**　\($d.up)\n**同步中的会话**　\([$d.sessions[] | select(.active and (.hub | not))] | length) 个\n**今天**　收到 \($d.today.inbound // 0) 条 · 转发 \($d.today.route // 0) 条 · 发回 \($d.today.outbound // 0) 条\(if ($d.today["outbound-failed"] // 0) > 0 then " · <font color=\"red\">发回失败 \($d.today["outbound-failed"]) 次</font>" else "" end)\n**常驻内存**　\($d.mem) MB"),
           md("**最近事件**\n" + (if ($d.events | length) == 0 then "<font color=\"grey\">暂无</font>" else
              ($d.events | map(split(" ") as $w
                | ($w[1]) as $t

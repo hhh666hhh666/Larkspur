@@ -12,29 +12,31 @@
 - **一个会话一个群**：群名形如「Claude · 项目目录名 · 会话标题」，会话标题直接取自 Claude 桌面端。
 - **双向**：AI 每轮的最终回复以 Markdown 富文本发到群里；你在群里发的消息会转给会话。
 - **图片**：群里的图片会下载到本地，交给 Claude 看图。图片后 3 秒内跟上的文字会合并成一条消息。
-- **桌面端显示为消息气泡**：开着总控时，群里的消息由总控转发进对应会话，在桌面端显示成一条用户消息气泡（标着"来自 飞书总控"）。没有总控时，各会话自己监听，Claude 回复时会先引用你的原话留痕，发回飞书时去掉这段引用。
+- **桌面端显示为消息气泡**：群里的消息由总控转发进对应会话，在桌面端显示成一条用户消息气泡（标着"来自 飞书总控"）。
 - **断线自动恢复**：桌面端重启、上下文压缩会让监听随进程一起停掉。同步本身不会关，会话下一回合结束时，钩子会让 Claude 自动重启监听，并补发中断期间你在群里发的消息。
 - **已读回执**：收到你的飞书消息时，会立刻给那条消息加一个「了解」表情，表示 Claude 已经收到。
 - **只认你本人**：只放行你自己的 open_id、且发在该会话专属群里的消息。
-- **总控：在飞书里新建会话、统一转发**：把一个会话设为总控（`/feishu hub`），在和机器人的私聊里发 `新会话 <目录> [标题]`，就会在该目录新建一个 Claude Code 会话、建好它的专属群，并导入桌面端侧边栏。总控同时用一路监听接收所有群的消息并转发，其他会话不再各自挂监听。
+- **总控：在飞书里新建会话、统一转发**：把一个会话设为总控（`/feishu hub`），在和机器人的私聊里发 `新会话 <目录> [标题]`，就会在该目录新建一个 Claude Code 会话、建好它的专属群，并导入桌面端侧边栏。总控同时用一路监听接收所有群的消息并转发。**必须有总控**：普通会话不允许自己监听。
 - **不依赖第三方服务**：只用到官方的 [`lark-cli`](https://www.npmjs.com/package/@larksuite/cli) 和 Claude Code 自带的钩子、技能与 Monitor 工具。
 
 ## 工作原理
 
-有两种接收方式，按有没有活动的总控自动切换（`lib/mode.sh` 可查看当前是哪种）：
+**只有总控监听**，普通会话不允许自己挂监听（`lib/mode.sh` 输出 `router` 表示总控在工作，`none` 表示没有总控）：
 
-- **路由模式（有总控，推荐）**：总控用一路 lark-cli 监听所有群。收到你在某个会话专属群里的消息后，输出一行 `飞书转发` 事件，总控用桌面端的 `send_message` 把原文投进那个会话，显示为消息气泡。各会话不挂监听，也就没有各自每 30 分钟的续期开销。
-- **直连模式（没有总控）**：每个会话用自己的 Monitor 监听自己的群，如下图。
+- 总控用一路 lark-cli 监听自己的私聊和所有会话的专属群。收到你在某个会话专属群里的消息后，输出一行 `飞书转发` 事件，总控用桌面端的 `send_message` 把原文投进那个会话，显示为消息气泡。
+- 普通会话即使执行了 `listen.sh` 也会直接退出；总控监听启动时，会把旧版本留下的会话监听全部停掉。
+- 没有总控时，普通会话照常把 AI 回复发到群里，但收不到群消息，Stop 钩子会在群里提醒你开总控（10 分钟内最多一次）。总控开启后会补发中断期间的消息。
 
 ```
-                 /feishu on
-Claude Code 会话 ───────────► on.sh：机器人建群，记录「会话 ID → 群 ID」
-     │  ▲
-     │  │ Monitor 事件（listen.sh：lark-cli 长连接，按群 ID 与发送者过滤，下载图片）
-     │  └──────────────────────────────────────── 飞书群：你发的消息
+                     /feishu on
+Claude Code 会话 ◄──────────────► on.sh：机器人建群，记录「会话 ID → 群 ID」
+     ▲   │
+     │   ├─ Stop 钩子（notify.sh）：本轮最终回复 ──────────────► 飞书群
+     │   └─ Stop 钩子（ensure-listener.sh）：总控监听停了就提醒总控；没有总控就在群里提醒开总控
      │
-     ├─ Stop 钩子（notify.sh）：本轮最终回复 ──────► 飞书群
-     └─ Stop 钩子（ensure-listener.sh）：监听没在跑，就让 Claude 重启它（新监听补发漏掉的消息）
+     │ send_message（消息气泡）
+     │
+总控会话 ◄── Monitor 事件（listen.sh --hub：一路 lark-cli 长连接，按发送者过滤，下载图片）── 飞书：私聊 + 各会话的群
 ```
 
 | 文件 | 作用 |
@@ -48,9 +50,9 @@ Claude Code 会话 ───────────► on.sh：机器人建群�
 | `lib/say.sh` | 总控用：以机器人身份发一条提醒 |
 | `lib/console.sh` | 控制台卡片：渲染、置顶、原地更新，处理卡片上的点击 |
 | `lib/listen-menu.sh` | 总控用：响应机器人菜单「控制台」 |
-| `lib/mode.sh` | 输出当前是路由模式（router）还是直连模式（direct） |
+| `lib/mode.sh` | 输出当前有没有总控在转发（router / none） |
 | `hooks/notify.sh` | Stop 钩子：只给开启了同步的会话，把最终回复发到对应的群 |
-| `hooks/ensure-listener.sh` | Stop 钩子：监听停了（进程重启、上下文压缩）就让 Claude 重新启动 |
+| `hooks/ensure-listener.sh` | Stop 钩子：总控的监听停了（进程重启、上下文压缩）就让总控重新启动；没有总控时在群里提醒 |
 | `hooks/session-end.sh` | SessionEnd 钩子：只在 `/clear`、登出时关闭同步，进程退出时保留 |
 | `skill/SKILL.md` | `/feishu on \| off` 技能，告诉 Claude 如何处理飞书事件 |
 
@@ -181,10 +183,10 @@ cd Larkspur
 
 - **会话必须开着**：监听挂在会话里，关闭会话、休眠或断网就停了。进程重启后，要等这个会话下一次有回合结束（你在桌面端发一句话，或任意通知）才会恢复监听；恢复时会补发中间的消息，但不会自己"醒来"。
 - **Monitor 最长 30 分钟**：到期后 Claude 会自动续期，续期的回合不输出文字，也不会发飞书。
-- **资源占用**：每个开着同步的会话常驻一个 lark-cli 进程，约 15～20 MB，空闲时几乎不占 CPU（直接调用 lark-cli 的 Go 程序，跳过 npm 的 node 启动壳）。token 方面，每路监听每 30 分钟续期一次，要花 2 次模型调用；每次调用都会读一遍会话上下文（大多命中缓存），所以上下文越长、开着同步的会话越多，空闲时的消耗越大。总控的私聊和卡片合用一路监听；路由模式下只有总控这一路，所有会话合计也只有一个常驻 lark-cli 进程。
+- **资源占用**：所有会话合计只有总控一路常驻监听（消息、卡片、菜单各一个 lark-cli 进程，每个约 15～20 MB），空闲时几乎不占 CPU（直接调用 lark-cli 的 Go 程序，跳过 npm 的 node 启动壳）。token 方面，监听每 30 分钟续期一次，要花总控 2 次模型调用。
 - **只同步每轮的最终回复**：中间过程和工具调用不会发到飞书。
-- **路由模式依赖总控**：总控停了，所有会话都收不到飞书消息（其他会话回合结束时，Stop 钩子会提醒总控重启监听）。每条转发要花总控一次模型调用，会读一遍总控的上下文，总控的上下文越短越省，可以定期清空总控的对话。
-- **气泡带来源标记**：转发的消息显示为"来自 飞书总控"的用户消息，不完全等同于你亲手输入。没有总控时（直连模式），飞书消息以事件通知的形式出现，并在 Claude 的回复里被引用。
+- **依赖总控**：总控停了，所有会话都收不到飞书消息（其他会话回合结束时，Stop 钩子会提醒总控重启监听）。每条转发要花总控一次模型调用，会读一遍总控的上下文，总控的上下文越短越省，可以定期清空总控的对话。
+- **气泡带来源标记**：转发的消息显示为"来自 飞书总控"的用户消息，不完全等同于你亲手输入。
 - 群名只在开启时同步一次。会话标题之后改了，再执行一次 `/feishu on` 即可更新群名。
 
 ## 测试
@@ -208,7 +210,7 @@ tests/test-recover.sh  # 监听顶替、断线补发、Stop 钩子提醒重启�
 
 ## English summary
 
-Larkspur bridges individual Claude Code sessions to Feishu/Lark. Run `/feishu on` in a session and a bot creates a dedicated Feishu group for it. Claude's final reply each turn is posted to the group, and your messages and images in that group are fed back into the session through Claude Code's Monitor tool. Each session gets its own group, so conversations never mix. It uses only the official `lark-cli`, Claude Code hooks, a skill and the Monitor tool. Only messages from your own open_id in the session's group are accepted. Enabling it authorizes Claude to act on those messages as if you had typed them, so read the security notes above. Install with `./install.sh`, remove with `./uninstall.sh`.
+Larkspur bridges individual Claude Code sessions to Feishu/Lark. Run `/feishu on` in a session and a bot creates a dedicated Feishu group for it. Claude's final reply each turn is posted to the group, and your messages and images in that group are relayed into the session by a hub session (`/feishu hub`), which runs the only listener; individual sessions never listen on their own. Each session gets its own group, so conversations never mix. It uses only the official `lark-cli`, Claude Code hooks, a skill and the Monitor tool. Only messages from your own open_id in the session's group are accepted. Enabling it authorizes Claude to act on those messages as if you had typed them, so read the security notes above. Install with `./install.sh`, remove with `./uninstall.sh`.
 
 ## 许可证
 
